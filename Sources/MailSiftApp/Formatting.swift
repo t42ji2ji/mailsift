@@ -45,7 +45,6 @@ enum Fmt {
 
     static func sender(_ m: MessageMeta) -> String { m.senderName.isEmpty ? m.senderAddress : m.senderName }
 
-
     static func phase(_ p: IndexStatus.Phase) -> String {
         switch p {
         case .idle: "閒置"
