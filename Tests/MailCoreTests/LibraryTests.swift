@@ -180,6 +180,10 @@ final class FakeSource: MailSource, @unchecked Sendable {
         }
     }
 
+    func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL {
+        throw MailSourceError.other("Not downloaded by Mail yet")
+    }
+
     func perform(_ action: MailAction, on ids: [Int64]) async throws -> ActionReport {
         lock.withLock {
             if action == .trash {

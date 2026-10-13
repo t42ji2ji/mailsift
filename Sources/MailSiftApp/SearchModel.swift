@@ -15,6 +15,8 @@ final class SearchModel {
         didSet { if selection != oldValue { loadSelected() } }
     }
     private(set) var message: ParsedMessage?
+    /// The message HTML with `cid:` images inlined as data URIs (nil until resolved or when there is no HTML).
+    private(set) var html: String?
     private(set) var loadingMessage = false
     private(set) var actionRunning = false
     var actionError: String?
@@ -24,6 +26,8 @@ final class SearchModel {
     @ObservationIgnored private var messageTask: Task<Void, Never>?
 
     init(app: AppModel) { self.app = app }
+
+    var library: MailLibrary? { app.library }
 
     func loadRecent() {
         guard let lib = app.library else { return }
@@ -59,6 +63,7 @@ final class SearchModel {
     private func loadSelected() {
         messageTask?.cancel()
         message = nil
+        html = nil
         actionError = nil
         guard let id = selection, let lib = app.library else { return }
         loadingMessage = true
@@ -69,6 +74,11 @@ final class SearchModel {
             switch result {
             case .success(let m):
                 message = m
+                html = m.html
+                if m.html != nil, m.attachments.contains(where: { $0.contentID != nil && $0.isDownloaded }) {
+                    let resolved = await Task.detached { Self.inlineImages(m, lib) }.value
+                    if selection == id { html = resolved }
+                }
                 if !m.meta.isRead { perform(.markRead) }  // opening reads it, as in Mail
             case .failure(let e): actionError = e.localizedDescription
             }
@@ -116,6 +126,17 @@ final class SearchModel {
             if let i = recent.firstIndex(where: { $0.id == id }) { update(&recent[i].meta) }
             if message?.meta.id == id { update(&message!.meta) }
         }
+    }
+
+    /// Replaces `cid:` references with data URIs so WebKit can show inline images without file access.
+    nonisolated static func inlineImages(_ m: ParsedMessage, _ lib: MailLibrary) -> String? {
+        guard var html = m.html else { return nil }
+        for a in m.attachments {
+            guard let cid = a.contentID, a.isDownloaded, html.contains("cid:\(cid)"),
+                  let url = try? lib.attachmentFile(m.meta, a), let data = try? Data(contentsOf: url) else { continue }
+            html = html.replacingOccurrences(of: "cid:\(cid)", with: "data:\(a.mimeType);base64,\(data.base64EncodedString())")
+        }
+        return html
     }
 
     static func describe(_ error: Error) -> String {

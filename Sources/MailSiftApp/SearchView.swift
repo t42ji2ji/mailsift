@@ -6,30 +6,35 @@ struct SearchView: View {
     @Bindable var model: SearchModel
     @State private var hasText = false
     @State private var clearToken = 0
-    /// Too narrow for list and message side by side: show one, the open message taking over the list.
+    /// Too narrow for list and message side by side: the open message slides over the list.
     @State private var narrow = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            if !narrow || model.selection == nil {
+        ZStack {
+            HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     searchBar
                     results
                 }
                 .frame(minWidth: 320, idealWidth: 400, maxWidth: narrow ? .infinity : 460)
                 .background(Theme.paper)
+
+                if !narrow {
+                    Rectangle().fill(Theme.hairline).frame(width: 1)
+                    MessageDetailView(model: model)
+                        .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Theme.canvas)
+                }
             }
 
-            if !narrow {
-                Rectangle().fill(Theme.hairline).frame(width: 1)
-            }
-
-            if !narrow || model.selection != nil {
-                MessageDetailView(model: model, onBack: narrow ? { model.selection = nil } : nil)
-                    .frame(minWidth: narrow ? 0 : 360, maxWidth: .infinity, maxHeight: .infinity)
+            if narrow, model.selection != nil {
+                MessageDetailView(model: model, onBack: { model.selection = nil })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Theme.canvas)
+                    .transition(.move(edge: .trailing))
             }
         }
+        .animation(.easeOut(duration: 0.25), value: narrow && model.selection != nil)
         .onGeometryChange(for: Bool.self) { $0.size.width < 720 } action: { narrow = $0 }
     }
 
@@ -51,7 +56,13 @@ struct SearchView: View {
         .padding(.horizontal, 12)
         .frame(height: 40)
         .background(Theme.fill, in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 14)
+        .overlay(alignment: .trailing) {
+            IconButton(symbol: "square.and.pencil", help: "新郵件（⌘N）") { Compose.newMessage() }
+                .keyboardShortcut("n", modifiers: .command)
+                .offset(x: 38)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 52)
         .padding(.top, 42)
         .padding(.bottom, 8)
         .task(id: app.indexRevision) { model.loadRecent() }

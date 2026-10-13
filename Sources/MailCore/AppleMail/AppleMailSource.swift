@@ -19,12 +19,16 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
     /// - Parameters:
     ///   - libraryMail: `~/Library/Mail`; the newest `V<n>` directory inside is used.
     ///   - runScript: executes AppleScript source and returns its result (injectable for tests).
-    public init(libraryMail: URL? = nil, accountsDB: String? = nil,
+    let cachesRoot: URL
+
+    public init(libraryMail: URL? = nil, accountsDB: String? = nil, cachesRoot: URL? = nil,
                 runScript: (@Sendable (String) async throws -> String)? = nil) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.libraryMail = libraryMail ?? home.appendingPathComponent("Library/Mail")
         self.accountsDB = accountsDB ?? home.appendingPathComponent("Library/Accounts/Accounts4.sqlite").path
         self.runScript = runScript ?? { try await MailScriptRunner.run($0) }
+        self.cachesRoot = cachesRoot ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MailSift/attachments", isDirectory: true)
     }
 
     // MARK: Store layout
@@ -147,13 +151,38 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
 
     public func parse(_ meta: MessageMeta) throws -> ParsedMessage {
         guard let path = try messageFile(meta.id) else { throw MailSourceError.messageFileMissing(meta.id) }
-        let parsed = try AppleMailSource.parseFile(path: path)
+        let parsed = try AppleMailSource.parseFile(path: path, id: meta.id)
         guard let parsed else { throw MailSourceError.messageFileMissing(meta.id) }
         var m = meta
         if m.subject.isEmpty { m.subject = parsed.subject }
         if m.senderAddress.isEmpty, let f = parsed.from { m.senderAddress = f.address.lowercased(); m.senderName = f.name }
         return ParsedMessage(meta: m, to: parsed.to.map(Self.format), cc: parsed.cc.map(Self.format),
-                             bodyText: parsed.bodyText, html: parsed.html)
+                             bodyText: parsed.bodyText, html: parsed.html, attachments: parsed.attachments)
+    }
+
+    /// Mail's own saved copy when it has one; otherwise the part decoded from the .emlx into
+    /// ~/Library/Caches/MailSift/attachments/<id>/<part>/ (written once, reused).
+    public func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL {
+        guard let path = try messageFile(meta.id) else { throw MailSourceError.messageFileMissing(meta.id) }
+        let mailDir = MailAttachments.attachmentsDir(forEmlx: path, id: meta.id)
+        if let f = MailAttachments.diskFile(in: mailDir, part: attachment.part) { return f }
+
+        let cacheDir = cachesRoot.appendingPathComponent("\(meta.id)/\(attachment.part)", isDirectory: true)
+        let target = cacheDir.appendingPathComponent(MailAttachments.sanitize(attachment.filename))
+        if FileManager.default.fileExists(atPath: target.path) { return target }
+
+        guard let data = FileManager.default.contents(atPath: path) else { throw MailSourceError.messageFileMissing(meta.id) }
+        let root = MIME.parse(Emlx.messageBytes(data))
+        guard let part = MailAttachments.part(root, number: attachment.part), MailAttachments.hasBody(part) else {
+            throw MailSourceError.other("Not downloaded by Mail yet")
+        }
+        do {
+            try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            try Data(part.decodedBody).write(to: target, options: .atomic)
+        } catch {
+            throw MailSourceError.other("Cannot save attachment: \(error.localizedDescription)")
+        }
+        return target
     }
 
     static func format(_ a: MIME.Address) -> String {
@@ -167,10 +196,12 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         var cc: [MIME.Address]
         var bodyText: String
         var html: String?
+        var attachments: [Attachment]
     }
 
     /// Parses one .emlx file. Returns nil when the file is gone.
-    static func parseFile(path: String) throws -> FileParse? {
+    /// `id` locates Mail's saved attachments next to the Messages folder; pass nil to skip that check.
+    static func parseFile(path: String, id: Int64? = nil) throws -> FileParse? {
         guard let data = FileManager.default.contents(atPath: path) else {
             if FileManager.default.fileExists(atPath: path) { throw MailSourceError.fullDiskAccessRequired }
             return nil
@@ -183,7 +214,8 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
             from: MIME.parseAddresses(root.header("from") ?? "").first,
             to: MIME.parseAddresses(root.header("to") ?? ""),
             cc: MIME.parseAddresses(root.header("cc") ?? ""),
-            bodyText: body.text, html: body.html)
+            bodyText: body.text, html: body.html,
+            attachments: MailAttachments.list(root, attachmentsDir: id.map { MailAttachments.attachmentsDir(forEmlx: path, id: $0) }))
     }
 
     // MARK: Actions

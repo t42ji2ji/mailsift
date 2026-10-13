@@ -19,7 +19,7 @@ struct MessageDetailView: View {
                 VStack(spacing: 0) {
                     actionBar(m.meta, hasHTML: m.html != nil)
                     if let error = model.actionError { ErrorStrip(text: error) }
-                    if !plainText, let html = m.html {
+                    if !plainText, let html = model.html ?? m.html {
                         header(m).padding(.horizontal, 36).padding(.bottom, 18)
                         Rectangle().fill(Theme.hairline).frame(height: 1)
                         HTMLBodyView(html: html, allowRemote: remoteImages)
@@ -111,6 +111,7 @@ struct MessageDetailView: View {
                     }
                 }
             }
+            AttachmentStrip(message: m, library: model.library)
         }
         .padding(.top, 6)
     }
