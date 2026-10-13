@@ -16,6 +16,11 @@ final class IndexStore: @unchecked Sendable {
         writer = try SQLiteConnection(url: url)
         try writer.execute("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
         try writer.execute(Self.schema)
+        var columns = Set<String>()
+        try writer.query("PRAGMA table_info(messages)") { columns.insert($0.text(1)) }
+        if !columns.contains("in_inbox") {
+            try writer.execute("ALTER TABLE messages ADD COLUMN in_inbox INTEGER NOT NULL DEFAULT 1")
+        }
         reader = try SQLiteConnection(url: url)
     }
 
@@ -66,13 +71,13 @@ final class IndexStore: @unchecked Sendable {
             try db.transaction {
                 let statement = try db.prepare("""
                     INSERT INTO messages(id, account, mailbox_id, mailbox_name, mailbox_role, date, subject,
-                        sender_address, sender_name, is_read, is_flagged, body)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        sender_address, sender_name, is_read, is_flagged, body, in_inbox)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET account=excluded.account, mailbox_id=excluded.mailbox_id,
                         mailbox_name=excluded.mailbox_name, mailbox_role=excluded.mailbox_role, date=excluded.date,
                         subject=excluded.subject, sender_address=excluded.sender_address,
                         sender_name=excluded.sender_name, is_read=excluded.is_read, is_flagged=excluded.is_flagged,
-                        body=excluded.body
+                        body=excluded.body, in_inbox=excluded.in_inbox
                     """)
                 for message in messages {
                     let m = message.meta
@@ -80,7 +85,7 @@ final class IndexStore: @unchecked Sendable {
                         .int(m.id), .text(m.mailbox.account), .int(m.mailbox.id), .text(m.mailbox.name),
                         .text(m.mailbox.role.rawValue), .double(m.date.timeIntervalSince1970), .text(m.subject),
                         .text(m.senderAddress), .text(m.senderName), .int(m.isRead ? 1 : 0), .int(m.isFlagged ? 1 : 0),
-                        .text(String(message.bodyText.prefix(Self.maxStoredBody))),
+                        .text(String(message.bodyText.prefix(Self.maxStoredBody))), .int(m.inInbox ? 1 : 0),
                     ])
                 }
             }
@@ -93,27 +98,28 @@ final class IndexStore: @unchecked Sendable {
             try db.transaction {
                 let statement = try db.prepare("""
                     UPDATE messages SET account=?, mailbox_id=?, mailbox_name=?, mailbox_role=?, date=?, is_read=?,
-                        is_flagged=? WHERE id=?
+                        is_flagged=?, in_inbox=? WHERE id=?
                     """)
                 for m in metas {
                     try statement.run([
                         .text(m.mailbox.account), .int(m.mailbox.id), .text(m.mailbox.name),
                         .text(m.mailbox.role.rawValue), .double(m.date.timeIntervalSince1970), .int(m.isRead ? 1 : 0),
-                        .int(m.isFlagged ? 1 : 0), .int(m.id),
+                        .int(m.isFlagged ? 1 : 0), .int(m.inInbox ? 1 : 0), .int(m.id),
                     ])
                 }
             }
         }
     }
 
-    func setFlags(_ ids: [Int64], isRead: Bool? = nil, isFlagged: Bool? = nil) throws {
+    func setFlags(_ ids: [Int64], isRead: Bool? = nil, isFlagged: Bool? = nil, inInbox: Bool? = nil) throws {
         try write { db in
             try db.transaction {
                 let statement = try db.prepare(
-                    "UPDATE messages SET is_read=coalesce(?, is_read), is_flagged=coalesce(?, is_flagged) WHERE id=?")
+                    "UPDATE messages SET is_read=coalesce(?, is_read), is_flagged=coalesce(?, is_flagged), in_inbox=coalesce(?, in_inbox) WHERE id=?")
                 for id in ids {
                     try statement.run([
-                        isRead.map { .int($0 ? 1 : 0) } ?? .null, isFlagged.map { .int($0 ? 1 : 0) } ?? .null, .int(id),
+                        isRead.map { .int($0 ? 1 : 0) } ?? .null, isFlagged.map { .int($0 ? 1 : 0) } ?? .null,
+                        inInbox.map { .int($0 ? 1 : 0) } ?? .null, .int(id),
                     ])
                 }
             }
@@ -194,7 +200,7 @@ final class IndexStore: @unchecked Sendable {
 
     private static let metaColumns = """
         m.id, m.account, m.mailbox_id, m.mailbox_name, m.mailbox_role, m.date, m.subject, m.sender_address,
-        m.sender_name, m.is_read, m.is_flagged
+        m.sender_name, m.is_read, m.is_flagged, m.in_inbox
         """
 
     private static func meta(_ s: Statement) -> MessageMeta {
@@ -202,7 +208,7 @@ final class IndexStore: @unchecked Sendable {
             id: s.int(0),
             mailbox: MailboxRef(id: s.int(2), account: s.text(1), name: s.text(3), role: MailboxRole(rawValue: s.text(4)) ?? .other),
             date: Date(timeIntervalSince1970: s.double(5)), subject: s.text(6), senderAddress: s.text(7),
-            senderName: s.text(8), isRead: s.int(9) != 0, isFlagged: s.int(10) != 0)
+            senderName: s.text(8), isRead: s.int(9) != 0, isFlagged: s.int(10) != 0, inInbox: s.int(11) != 0)
     }
 
     func metaAndBody(_ ids: [Int64]) throws -> [Int64: (meta: MessageMeta, body: String)] {
@@ -211,21 +217,24 @@ final class IndexStore: @unchecked Sendable {
             let statement = try db.prepare("SELECT \(Self.metaColumns), m.body FROM messages m WHERE m.id=?")
             for id in ids {
                 try statement.bind([.int(id)])
-                if try statement.step() { result[id] = (Self.meta(statement), statement.text(11)) }
+                if try statement.step() { result[id] = (Self.meta(statement), statement.text(12)) }
             }
             return result
         }
     }
 
-    /// The newest `limit` messages plus every flagged one, with their stored body, newest first.
-    func recent(limit: Int) throws -> [(meta: MessageMeta, body: String)] {
-        try read { db in
+    /// Newest messages in a browse box, with the start of their stored body.
+    func recent(_ box: BrowseBox, limit: Int) throws -> [(meta: MessageMeta, body: String)] {
+        let condition = switch box {
+        case .inbox: "m.in_inbox = 1"
+        case .archive: "m.in_inbox = 0"
+        case .flagged: "m.is_flagged = 1"
+        }
+        return try read { db in
             var rows: [(meta: MessageMeta, body: String)] = []
-            try db.query("""
-                SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m
-                WHERE m.is_flagged = 1 OR m.id IN (SELECT id FROM messages ORDER BY date DESC LIMIT ?)
-                ORDER BY m.date DESC
-                """, [.int(Int64(limit))]) { rows.append((Self.meta($0), $0.text(11))) }
+            try db.query(
+                "SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m WHERE \(condition) ORDER BY m.date DESC LIMIT ?",
+                [.int(Int64(limit))]) { rows.append((Self.meta($0), $0.text(12))) }
             return rows
         }
     }

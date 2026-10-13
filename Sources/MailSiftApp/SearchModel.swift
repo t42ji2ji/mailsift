@@ -29,9 +29,23 @@ final class SearchModel {
 
     var library: MailLibrary? { app.library }
 
+    /// Which mailbox the list browses while the query is empty.
+    var box: BrowseBox = .inbox {
+        didSet {
+            guard box != oldValue else { return }
+            recent = []
+            selection = nil
+            loadRecent()
+        }
+    }
+
     func loadRecent() {
         guard let lib = app.library else { return }
-        Task { recent = await Task.detached { lib.recent() }.value }
+        let box = box
+        Task {
+            let rows = await Task.detached { lib.recent(box) }.value
+            if box == self.box { recent = rows }
+        }
     }
 
     /// Called by the search field with committed (non-composing) text only.

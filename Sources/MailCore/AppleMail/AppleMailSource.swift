@@ -99,8 +99,10 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         try list { !MailboxRoles.isExcluded($0) }
     }
 
-    public func listTrash() throws -> [MessageMeta] {
-        try list { $0.role == .trash }
+    /// Messages in Trash or Spam; other roles return [] (the library derives inbox/archive from `inInbox`).
+    public func listMailbox(_ role: MailboxRole) throws -> [MessageMeta] {
+        guard role == .trash || role == .spam else { return [] }
+        return try list { $0.role == role }
     }
 
     private func list(_ include: (AppleMailbox) -> Bool) throws -> [MessageMeta] {
@@ -116,6 +118,15 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         }
         let gmailAccounts = Set(boxes.values.filter(\.isGmailSystem).map(\.accountUUID))
 
+        // Gmail keeps INBOX membership as a label on the All Mail row; one query for all of them.
+        var inboxLabelled = Set<Int64>()
+        let inboxBoxes = boxes.values.filter { $0.role == .inbox && gmailAccounts.contains($0.accountUUID) }.map(\.id)
+        if !inboxBoxes.isEmpty {
+            try db.query("select message_id from labels where mailbox_id in (\(inboxBoxes.map(String.init).joined(separator: ",")))") {
+                inboxLabelled.insert($0.int(0))
+            }
+        }
+
         struct Row { var meta: MessageMeta; var gid: Int64; var account: String }
         var rows: [Row] = []
         rows.reserveCapacity(files.count)
@@ -129,13 +140,18 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
             order by m.date_received desc, m.ROWID desc
             """) { r in
             let id = r.int(0)
-            guard let ref = refs[r.int(1)], files[id] != nil else { return }
+            guard let ref = refs[r.int(1)], let mb = boxes[r.int(1)], files[id] != nil else { return }
+            let inInbox: Bool
+            switch mb.role {
+            case .trash, .spam, .drafts: inInbox = false
+            default: inInbox = mb.scheme != "local" && (mb.role == .inbox || inboxLabelled.contains(id))
+            }
             let meta = MessageMeta(
                 id: id, mailbox: ref, date: Date(timeIntervalSince1970: r.double(2)),
                 subject: (r.text(3) ?? "") + (r.text(4) ?? ""),
                 senderAddress: (r.text(5) ?? "").lowercased(), senderName: r.text(6) ?? "",
-                isRead: r.int(7) != 0, isFlagged: r.int(8) != 0)
-            rows.append(Row(meta: meta, gid: r.int(9), account: boxes[r.int(1)]!.accountUUID))
+                isRead: r.int(7) != 0, isFlagged: r.int(8) != 0, inInbox: inInbox)
+            rows.append(Row(meta: meta, gid: r.int(9), account: mb.accountUUID))
         }
 
         // Gmail: a message seen in All Mail and in a label mailbox is listed once, from All Mail.
@@ -305,7 +321,8 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
                     add(id, spec(mb), spec(archive))
                 }
             case .restore:
-                guard mb.role == .trash else { noop.append(id); continue }
+                // Out of Trash, or out of Spam ("not junk"): back to the account's INBOX.
+                guard mb.role == .trash || mb.role == .spam else { noop.append(id); continue }
                 guard let inbox = (byAccount[mb.accountUUID] ?? []).first(where: { $0.role == .inbox }) else {
                     failed[id] = "This account has no INBOX mailbox."; continue
                 }

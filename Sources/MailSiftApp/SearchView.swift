@@ -15,6 +15,7 @@ struct SearchView: View {
                 VStack(spacing: 0) {
                     searchBar
                     results
+                        .animation(.easeInOut(duration: 0.22), value: model.box)
                 }
                 .frame(minWidth: 320, idealWidth: 400, maxWidth: narrow ? .infinity : 460)
                 .background(Theme.paper)
@@ -73,6 +74,8 @@ struct SearchView: View {
             Message(symbol: "exclamationmark.circle", text: error)
         } else if model.query.isEmpty {
             HitList(model: model, sections: DateSection.group(model.recent), showMatch: false)
+                .id(model.box)
+                .transition(.push(from: .trailing))
         } else if model.hits.isEmpty, !model.searching {
             Message(symbol: "tray", text: "沒有結果")
         } else {
@@ -87,9 +90,8 @@ struct DateSection: Identifiable {
     let hits: [SearchHit]
     var id: String { title }
 
-    /// 已加旗標 on top, then 今天 / 昨天 / 本週 / 本月 / 更早, newest first, empty groups dropped.
+    /// 今天 / 昨天 / 本週 / 本月 / 更早, newest first, empty groups dropped.
     static func group(_ hits: [SearchHit], now: Date = .now) -> [DateSection] {
-        let flagged = hits.filter(\.meta.isFlagged)
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let bounds: [(String, Date)] = [
@@ -100,12 +102,11 @@ struct DateSection: Identifiable {
             ("更早", .distantPast),
         ]
         var buckets = Array(repeating: [SearchHit](), count: bounds.count)
-        for hit in hits where !hit.meta.isFlagged {
+        for hit in hits {
             let i = bounds.firstIndex { hit.meta.date >= $0.1 } ?? bounds.count - 1
             buckets[i].append(hit)
         }
-        let dated = zip(bounds, buckets).compactMap { $1.isEmpty ? nil : DateSection(title: $0.0, hits: $1) }
-        return (flagged.isEmpty ? [] : [DateSection(title: "已加旗標", hits: flagged)]) + dated
+        return zip(bounds, buckets).compactMap { $1.isEmpty ? nil : DateSection(title: $0.0, hits: $1) }
     }
 }
 

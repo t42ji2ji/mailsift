@@ -96,14 +96,19 @@ struct Wordmark: View {
 }
 
 struct MainView: View {
-    enum Pane: Hashable, CaseIterable {
-        case search, senders, trash, status, settings
+    enum Pane: Hashable {
+        case box(BrowseBox), spam, trash, senders, status, settings
+
+        static let mailboxes: [Pane] = [.box(.inbox), .box(.flagged), .box(.archive), .spam, .trash]
 
         var title: String {
             switch self {
-            case .search: "Inbox"
-            case .senders: "寄件者"
+            case .box(.inbox): "Inbox"
+            case .box(.flagged): "旗標"
+            case .box(.archive): "封存"
+            case .spam: "垃圾郵件"
             case .trash: "垃圾桶"
+            case .senders: "寄件者"
             case .status: "索引"
             case .settings: "設定"
             }
@@ -111,9 +116,12 @@ struct MainView: View {
 
         var symbol: String {
             switch self {
-            case .search: "tray"
-            case .senders: "person.2"
+            case .box(.inbox): "tray"
+            case .box(.flagged): "flag"
+            case .box(.archive): "archivebox"
+            case .spam: "xmark.bin"
             case .trash: "trash"
+            case .senders: "person.2"
             case .status: "circle.dashed"
             case .settings: "gearshape"
             }
@@ -121,27 +129,32 @@ struct MainView: View {
 
         var key: KeyEquivalent {
             switch self {
-            case .search: "1"
-            case .senders: "2"
-            case .trash: "3"
-            case .status: "4"
+            case .box(.inbox): "1"
+            case .box(.flagged): "2"
+            case .box(.archive): "3"
+            case .spam: "4"
+            case .trash: "5"
+            case .senders: "6"
+            case .status: "7"
             case .settings: ","
             }
         }
     }
 
     let app: AppModel
-    @State private var pane: Pane = .search
+    @State private var pane: Pane = .box(.inbox)
     @State private var showRail = true
     @State private var search: SearchModel
     @State private var senders: SendersModel
     @State private var trash: TrashModel
+    @State private var spam: TrashModel
     @State private var agent: AgentModel
 
     init(app: AppModel) {
         self.app = app
         _senders = State(initialValue: SendersModel(app: app))
-        _trash = State(initialValue: TrashModel(app: app))
+        _trash = State(initialValue: TrashModel(app: app, role: .trash))
+        _spam = State(initialValue: TrashModel(app: app, role: .spam))
         let search = SearchModel(app: app)
         _search = State(initialValue: search)
         _agent = State(initialValue: AgentModel(app: app, search: search))
@@ -155,9 +168,10 @@ struct MainView: View {
             }
             Group {
                 switch pane {
-                case .search: SearchView(app: app, model: search)
+                case .box: SearchView(app: app, model: search)
                 case .senders: SendersView(model: senders)
-                case .trash: TrashView(model: trash)
+                case .trash: TrashView(model: trash).id(Pane.trash)
+                case .spam: TrashView(model: spam).id(Pane.spam)
                 case .status: StatusView(app: app)
                 case .settings: SettingsView()
                 }
@@ -165,8 +179,9 @@ struct MainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .ignoresSafeArea(.container, edges: .top)
+        .onChange(of: pane) { if case .box(let b) = pane { search.box = b } }
         .modifier(AgentDrawer(model: agent, hasMessage: search.message != nil) { id in
-            pane = .search
+            if case .box = pane {} else { pane = .box(.inbox) }
             search.selection = id
         })
         .overlay(alignment: .topLeading) {
@@ -191,7 +206,9 @@ struct MainView: View {
                 .padding(.leading, 10)
                 .padding(.top, 46)
                 .padding(.bottom, 22)
-            ForEach([Pane.search, .senders, .trash], id: \.self, content: railItem)
+            ForEach(Pane.mailboxes, id: \.self, content: railItem)
+            Spacer().frame(height: 14)
+            railItem(.senders)
             Spacer()
             railItem(.status)
             railItem(.settings)

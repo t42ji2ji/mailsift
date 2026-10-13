@@ -89,6 +89,38 @@ final class AppleMailStoreTests: XCTestCase {
         XCTAssertTrue(all.allSatisfy { $0.mailbox.account.contains("@") }, "unmapped account")
         XCTAssertEqual(all.map(\.date), all.map(\.date).sorted(by: >))
         XCTAssertLessThan(elapsed, 5)
+
+        // Inbox membership vs. Mail's own INBOX counter (mailboxes.total_count) per account.
+        var inbox: [String: Int] = [:]
+        for m in all where m.inInbox { inbox[m.mailbox.account, default: 0] += 1 }
+        let db = try src.openIndex()
+        var mailCounts: [String: Int] = [:]
+        let emails = AppleAccounts.emailsByUUID(accountsDB: src.accountsDB)
+        try db.query("select ROWID, url, total_count from mailboxes") { r in
+            guard let mb = AppleMailbox(id: r.int(0), url: r.text(1) ?? ""), mb.role == .inbox, mb.scheme != "local" else { return }
+            mailCounts[emails[mb.accountUUID] ?? mb.accountUUID, default: 0] += Int(r.int(2))
+        }
+        print("inbox: ours \(inbox.sorted { $0.key < $1.key }); Mail total_count \(mailCounts.sorted { $0.key < $1.key })")
+        for (account, n) in inbox { XCTAssertEqual(Double(n), Double(mailCounts[account] ?? 0), accuracy: max(5, Double(n) * 0.01), account) }
+    }
+
+    func testListMailboxTrashAndSpam() throws {
+        let src = try realSource()
+        let trash = try src.listMailbox(.trash), spam = try src.listMailbox(.spam)
+        print("trash: \(trash.count), spam: \(spam.count)")
+        XCTAssertTrue(trash.allSatisfy { $0.mailbox.role == .trash && !$0.inInbox })
+        XCTAssertTrue(spam.allSatisfy { $0.mailbox.role == .spam && !$0.inInbox })
+        XCTAssertEqual(try src.listMailbox(.sent), [])
+        // restore moves Trash and Spam messages to their account's INBOX (planned only; nothing runs).
+        if let t = trash.first, let j = spam.first {
+            let plan = try src.plan(.restore, ids: [t.id, j.id])
+            XCTAssertTrue(plan.noop.isEmpty && plan.failed.isEmpty)
+            XCTAssertEqual(Set(plan.jobs.flatMap(\.ids)), [t.id, j.id])
+            XCTAssertTrue(plan.jobs.allSatisfy { $0.target?.path == "INBOX" })
+            XCTAssertEqual(Set(plan.jobs.map { MailboxRoles.role(forPath: $0.source.path) }), [.trash, .spam])
+        }
+        let searchable = Set(try src.listMessages().map(\.id))
+        XCTAssertTrue(searchable.isDisjoint(with: trash.map(\.id)) && searchable.isDisjoint(with: spam.map(\.id)))
     }
 
     func testParseSamplesOnRealStore() throws {

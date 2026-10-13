@@ -159,8 +159,8 @@ public final class MailLibrary: @unchecked Sendable {
     }
 
     /// Newest messages, for browsing before any query.
-    public func recent(limit: Int = 400) -> [SearchHit] {
-        ((try? store.recent(limit: limit)) ?? []).map {
+    public func recent(_ box: BrowseBox = .inbox, limit: Int = 400) -> [SearchHit] {
+        ((try? store.recent(box, limit: limit)) ?? []).map {
             SearchHit(meta: $0.meta, snippet: Searcher.snippet($0.body, terms: []), score: 0, match: .keyword)
         }
     }
@@ -170,8 +170,11 @@ public final class MailLibrary: @unchecked Sendable {
     }
 
     /// What is in Trash right now, straight from the source.
-    public func trash() -> [MessageMeta] {
-        (try? source.listTrash()) ?? []
+    public func trash() -> [MessageMeta] { mailbox(.trash) }
+
+    /// Unindexed mailboxes (.trash, .spam), straight from the source.
+    public func mailbox(_ role: MailboxRole) -> [MessageMeta] {
+        (try? source.listMailbox(role)) ?? []
     }
 
     /// Full message from the source (with HTML); the stored text when the source cannot parse it.
@@ -202,11 +205,12 @@ public final class MailLibrary: @unchecked Sendable {
             try store.delete(done)
             searcher.invalidate()
             try refreshCounts(nil) { $0.totalMessages = max($0.totalMessages - done.count, 0) }
+        case .archive: try store.setFlags(done, inInbox: false)
         case .markRead: try store.setFlags(done, isRead: true)
         case .markUnread: try store.setFlags(done, isRead: false)
         case .flag: try store.setFlags(done, isFlagged: true)
         case .unflag: try store.setFlags(done, isFlagged: false)
-        case .archive, .restore: break  // the new mailbox is picked up by the next sync
+        case .restore: break  // restored mail is picked up by the next sync
         }
         return result
     }

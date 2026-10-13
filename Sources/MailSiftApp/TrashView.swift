@@ -11,16 +11,26 @@ final class TrashModel {
     private(set) var restoring: Int?
     var result: String?
 
+    /// .trash or .spam: unindexed mailboxes read straight from Mail.
+    let role: MailboxRole
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var previewTask: Task<Void, Never>?
 
-    init(app: AppModel) { self.app = app }
+    init(app: AppModel, role: MailboxRole) {
+        self.app = app
+        self.role = role
+    }
+
+    var title: String { role == .spam ? "垃圾郵件" : "垃圾桶" }
+    /// Both move the mail back to the inbox.
+    var restoreLabel: String { role == .spam ? "不是垃圾郵件" : "還原" }
 
     func reload() {
         guard let lib = app.library else { return }
         loading = true
         Task {
-            items = await Task.detached { lib.trash() }.value
+            let role = role
+            items = await Task.detached { lib.mailbox(role) }.value
             let ids = Set(items.map(\.id))
             selection = selection.filter { ids.contains($0) }
             loading = false
@@ -47,7 +57,7 @@ final class TrashModel {
         Task {
             do {
                 let r = try await lib.perform(.restore, ids: ids)
-                result = "已還原 \(Fmt.count(r.succeeded.count)) 封" + (r.failed.isEmpty ? "" : " · 失敗 \(Fmt.count(r.failed.count)) 封")
+                result = "已移回收件匣 \(Fmt.count(r.succeeded.count)) 封" + (r.failed.isEmpty ? "" : " · 失敗 \(Fmt.count(r.failed.count)) 封")
             } catch {
                 result = SearchModel.describe(error)
             }
@@ -82,11 +92,11 @@ struct TrashView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
-                Text("垃圾桶").font(.system(size: 26, weight: .semibold)).tracking(-0.4)
+                Text(model.title).font(.system(size: 26, weight: .semibold)).tracking(-0.4)
                 Text(Fmt.count(model.items.count)).font(.system(size: 13).monospacedDigit()).foregroundStyle(Theme.muted)
             }
             HStack(spacing: 10) {
-                Button(model.selection.isEmpty ? "還原" : "還原 · \(Fmt.count(model.selection.count)) 封") { model.restore() }
+                Button(model.selection.isEmpty ? model.restoreLabel : "\(model.restoreLabel) · \(Fmt.count(model.selection.count)) 封") { model.restore() }
                     .buttonStyle(InkButtonStyle())
                     .disabled(model.selection.isEmpty || model.restoring != nil)
                 if model.restoring != nil { ProgressView().controlSize(.mini) }
@@ -100,7 +110,7 @@ struct TrashView: View {
 
     @ViewBuilder private var list: some View {
         if model.items.isEmpty {
-            Message(symbol: "trash", text: model.loading ? "讀取中" : "垃圾桶是空的")
+            Message(symbol: model.role == .spam ? "xmark.bin" : "trash", text: model.loading ? "讀取中" : "\(model.title)是空的")
         } else {
             List(model.items, selection: $model.selection) { meta in
                 VStack(alignment: .leading, spacing: 3) {

@@ -27,11 +27,14 @@ public struct MessageMeta: Codable, Sendable, Hashable, Identifiable {
     public var senderName: String
     public var isRead: Bool
     public var isFlagged: Bool
+    /// In the inbox (Gmail: carries the INBOX label). Searchable mail that isn't is archived.
+    public var inInbox: Bool
 
     public init(id: Int64, mailbox: MailboxRef, date: Date, subject: String, senderAddress: String,
-                senderName: String, isRead: Bool, isFlagged: Bool) {
+                senderName: String, isRead: Bool, isFlagged: Bool, inInbox: Bool = true) {
         self.id = id; self.mailbox = mailbox; self.date = date; self.subject = subject
         self.senderAddress = senderAddress; self.senderName = senderName; self.isRead = isRead; self.isFlagged = isFlagged
+        self.inInbox = inInbox
     }
 }
 
@@ -110,8 +113,8 @@ public protocol MailSource: Sendable {
     func checkAccess() throws
     /// Every searchable message (excludes trash, spam, drafts), newest first. Must be fast (metadata only).
     func listMessages() throws -> [MessageMeta]
-    /// Messages currently in Trash mailboxes, newest first (metadata only; not part of the index).
-    func listTrash() throws -> [MessageMeta]
+    /// Messages in mailboxes of `role` (.trash, .spam), newest first. Metadata only; these aren't indexed.
+    func listMailbox(_ role: MailboxRole) throws -> [MessageMeta]
     /// Full parse of one message.
     func parse(_ meta: MessageMeta) throws -> ParsedMessage
     /// A readable file with the attachment's content: Mail's own copy when it exists, otherwise decoded from the
@@ -168,6 +171,11 @@ public struct SenderStat: Codable, Sendable, Identifiable {
     public init(address: String, name: String, account: String, count: Int, latest: Date) {
         self.address = address; self.name = name; self.account = account; self.count = count; self.latest = latest
     }
+}
+
+/// Views over the index: inbox, flagged, archive (searchable mail not in the inbox).
+public enum BrowseBox: String, Codable, Sendable, CaseIterable {
+    case inbox, flagged, archive
 }
 
 public struct SearchFilter: Codable, Sendable {
