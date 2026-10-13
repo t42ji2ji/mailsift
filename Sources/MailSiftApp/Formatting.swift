@@ -32,15 +32,6 @@ enum Fmt {
         return f.string(from: d)
     }
 
-    /// Rail footnote about the model, nil once it is loaded.
-    static func modelNote(_ m: AppModel.ModelState) -> String? {
-        switch m {
-        case .notLoaded, .loaded: nil
-        case .loading(let file, let bytes): file.isEmpty ? "載入模型中" : "下載模型 \(bytes > 0 ? Fmt.bytes(bytes) : "")"
-        case .failed: "模型無法載入，僅關鍵字搜尋"
-        }
-    }
-
     static func bytes(_ n: Int64) -> String { ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
 
     static func sender(_ m: MessageMeta) -> String { m.senderName.isEmpty ? m.senderAddress : m.senderName }

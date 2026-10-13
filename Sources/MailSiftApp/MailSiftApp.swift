@@ -103,7 +103,7 @@ struct MainView: View {
             switch self {
             case .search: "Inbox"
             case .senders: "寄件者"
-            case .status: "索引與連接"
+            case .status: "索引"
             }
         }
 
@@ -163,20 +163,21 @@ struct MainView: View {
         }
     }
 
+    private func railItem(_ p: Pane) -> some View {
+        RailItem(title: p.title, symbol: p.symbol, selected: pane == p) { pane = p }
+            .keyboardShortcut(p.key, modifiers: .command)
+    }
+
     private var rail: some View {
         VStack(alignment: .leading, spacing: 2) {
             Wordmark()
                 .padding(.leading, 10)
                 .padding(.top, 46)
                 .padding(.bottom, 22)
-            ForEach(Pane.allCases, id: \.self) { p in
-                RailItem(title: p.title, symbol: p.symbol, selected: pane == p) { pane = p }
-                    .keyboardShortcut(p.key, modifiers: .command)
-            }
+            ForEach([Pane.search, .senders], id: \.self, content: railItem)
             Spacer()
-            IndexMeter(status: app.status, model: app.model)
-                .padding(.horizontal, 10)
-                .padding(.bottom, 16)
+            railItem(.status)
+                .padding(.bottom, 14)
         }
         .padding(.horizontal, 12)
         .frame(width: Theme.railWidth, alignment: .leading)
@@ -207,35 +208,5 @@ private struct RailItem: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-    }
-}
-
-/// Index progress in the rail: two thin bars, keyword and semantic.
-private struct IndexMeter: View {
-    let status: IndexStatus
-    let model: AppModel.ModelState
-
-    var body: some View {
-        let total = max(status.totalMessages, 1)
-        VStack(alignment: .leading, spacing: 10) {
-            meter("關鍵字", status.keywordIndexed, total)
-            meter("語意", status.vectorIndexed, total)
-            if let note = Fmt.modelNote(model) {
-                Text(note).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(2)
-            }
-        }
-    }
-
-    private func meter(_ label: String, _ n: Int, _ total: Int) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text(label).font(.system(size: 11, weight: .medium))
-                Spacer()
-                Text("\(Int((Double(n) / Double(total) * 100).rounded()))%")
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(Theme.muted)
-            }
-            ThinProgress(value: Double(n) / Double(total))
-        }
     }
 }
