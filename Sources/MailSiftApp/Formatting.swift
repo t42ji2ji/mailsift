@@ -36,7 +36,7 @@ enum Fmt {
     static func modelNote(_ m: AppModel.ModelState) -> String? {
         switch m {
         case .notLoaded, .loaded: nil
-        case .loading(let file, let bytes): file.isEmpty ? "模型準備中" : "下載模型 \(bytes > 0 ? Fmt.bytes(bytes) : "")"
+        case .loading(let file, let bytes): file.isEmpty ? "載入模型中" : "下載模型 \(bytes > 0 ? Fmt.bytes(bytes) : "")"
         case .failed: "模型無法載入，僅關鍵字搜尋"
         }
     }

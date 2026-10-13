@@ -158,6 +158,13 @@ public final class MailLibrary: @unchecked Sendable {
         try await searcher.search(query, filter: filter, limit: limit, embedder: locked { embedder })
     }
 
+    /// Newest messages, for browsing before any query.
+    public func recent(limit: Int = 400) -> [SearchHit] {
+        ((try? store.recent(limit: limit)) ?? []).map {
+            SearchHit(meta: $0.meta, snippet: Searcher.snippet($0.body, terms: []), score: 0, match: .keyword)
+        }
+    }
+
     /// Full message from the source (with HTML); the stored text when the source cannot parse it.
     public func message(id: Int64) throws -> ParsedMessage {
         guard let row = try store.metaAndBody([id])[id] else { throw MailLibraryError.notIndexed(id) }

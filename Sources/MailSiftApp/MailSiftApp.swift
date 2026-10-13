@@ -8,11 +8,12 @@ struct MailSiftApp: App {
     var body: some Scene {
         Window("MailSift", id: "main") {
             RootView(app: app)
-                .frame(minWidth: 980, minHeight: 600)
+                .frame(minWidth: 880, minHeight: 560)
                 .background(Theme.canvas)
                 .task { app.start() }
         }
         .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
     }
 }
@@ -153,7 +154,7 @@ struct MainView: View {
     private var rail: some View {
         VStack(alignment: .leading, spacing: 2) {
             Wordmark()
-                .padding(.horizontal, 14)
+                .padding(.leading, 10)
                 .padding(.top, 46)
                 .padding(.bottom, 22)
             ForEach(Pane.allCases, id: \.self) { p in
@@ -162,10 +163,12 @@ struct MainView: View {
             }
             Spacer()
             IndexMeter(status: app.status, model: app.model)
-                .padding(14)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 16)
         }
-        .padding(.horizontal, 8)
-        .frame(width: Theme.railWidth)
+        .padding(.horizontal, 12)
+        .frame(width: Theme.railWidth, alignment: .leading)
+        .frame(maxHeight: .infinity)
         .background(Theme.paper)
     }
 }

@@ -217,6 +217,16 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
+    /// Newest messages with their stored body.
+    func recent(limit: Int) throws -> [(meta: MessageMeta, body: String)] {
+        try read { db in
+            var rows: [(meta: MessageMeta, body: String)] = []
+            try db.query("SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m ORDER BY m.date DESC LIMIT ?",
+                         [.int(Int64(limit))]) { rows.append((Self.meta($0), $0.text(11))) }
+            return rows
+        }
+    }
+
     /// All messages whose sender address equals `address` (case-insensitive), newest first.
     func metas(fromSender address: String, account: String?) throws -> [MessageMeta] {
         try read { db in

@@ -6,6 +6,8 @@ import Observation
 final class SearchModel {
     private(set) var query = ""
     private(set) var hits: [SearchHit] = []
+    /// Newest mail, shown while the query is empty.
+    private(set) var recent: [SearchHit] = []
     private(set) var searching = false
     private(set) var searchError: String?
 
@@ -22,6 +24,11 @@ final class SearchModel {
     @ObservationIgnored private var messageTask: Task<Void, Never>?
 
     init(app: AppModel) { self.app = app }
+
+    func loadRecent() {
+        guard let lib = app.library else { return }
+        Task { recent = await Task.detached { lib.recent() }.value }
+    }
 
     /// Called by the search field with committed (non-composing) text only.
     func submit(_ text: String) {
@@ -99,10 +106,12 @@ final class SearchModel {
         switch action {
         case .trash:
             hits.removeAll { $0.id == id }
+            recent.removeAll { $0.id == id }
             selection = nil
             app.refreshStatus()
         default:
             if let i = hits.firstIndex(where: { $0.id == id }) { update(&hits[i].meta) }
+            if let i = recent.firstIndex(where: { $0.id == id }) { update(&recent[i].meta) }
             if message?.meta.id == id { update(&message!.meta) }
         }
     }

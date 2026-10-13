@@ -26,6 +26,10 @@ final class AppModel {
     private(set) var library: MailLibrary?
 
     let databaseURL = MailLibrary.defaultDatabaseURL()
+    /// Bumped after every index run, so lists can reload.
+    private(set) var indexRevision = 0
+    @ObservationIgnored private var indexing = false
+    @ObservationIgnored private var autoSyncTask: Task<Void, Never>?
     @ObservationIgnored private var indexTask: Task<Void, Never>?
     @ObservationIgnored private var modelTask: Task<CoreMLEmbedder?, Never>?
 
@@ -49,6 +53,7 @@ final class AppModel {
             readiness = .ready
             loadModel()
             runIndex(lib)
+            startAutoSync(lib)
         } catch {
             readiness = .failed(error.localizedDescription)
         }
@@ -68,6 +73,17 @@ final class AppModel {
     func resync() {
         guard let lib = library else { return }
         runIndex(lib)
+    }
+
+    /// New mail arrives through Mail.app; pick it up every minute (sync only reads what changed).
+    private func startAutoSync(_ lib: MailLibrary) {
+        autoSyncTask?.cancel()
+        autoSyncTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                if !indexing { runIndex(lib) }
+            }
+        }
     }
 
     /// Called after actions that change the index outside sync (trash).
@@ -106,6 +122,11 @@ final class AppModel {
         }
         indexTask = Task {
             await previous?.value
+            indexing = true
+            defer {
+                indexing = false
+                indexRevision += 1
+            }
             do {
                 try await lib.sync(progress: report)
                 // Polled rather than awaited so that a resync during the model download can cancel this run.

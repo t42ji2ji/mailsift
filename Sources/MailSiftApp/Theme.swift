@@ -4,8 +4,10 @@ import SwiftUI
 /// Monochrome palette. Ink and paper swap in dark mode, so everything is built from these two plus opacities.
 enum Theme {
     static let ink = Color.primary
-    static let paper = Color(nsColor: .windowBackgroundColor)
-    static let canvas = Color(nsColor: .textBackgroundColor)
+    /// Rail and list background.
+    static let paper = gray(light: 0.925, dark: 0.115)
+    /// Reading pane: a step lighter than paper, never pure white.
+    static let canvas = gray(light: 0.965, dark: 0.145)
     static let muted = Color.primary.opacity(0.52)
     static let faint = Color.primary.opacity(0.32)
     static let hairline = Color.primary.opacity(0.09)
@@ -15,6 +17,13 @@ enum Theme {
 
     static let radius: CGFloat = 8
     static let railWidth: CGFloat = 196
+
+    private static func gray(light: CGFloat, dark: CGFloat) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor(white: isDark ? dark : light, alpha: 1)
+        })
+    }
 }
 
 extension View {
