@@ -165,6 +165,43 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         }.map(\.meta)
     }
 
+    public func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals] {
+        guard !ids.isEmpty else { return [:] }
+        let db = try openIndex()
+        var lists: [Int64: Bool] = [:], conversations: [Int64: Int64] = [:]
+        try db.query("select ROWID, coalesce(list_id_hash, 0), conversation_id from messages where ROWID in (\(Self.sqlList(ids)))") {
+            lists[$0.int(0)] = $0.int(1) != 0
+            if $0.int(2) != 0 { conversations[$0.int(0)] = $0.int(2) }
+        }
+        var members: [Int64: [Int64]] = [:]
+        let threads = Array(Set(conversations.values))
+        if !threads.isEmpty {
+            try db.query("select conversation_id, ROWID from messages where deleted = 0 and conversation_id in (\(Self.sqlList(threads)))") {
+                members[$0.int(0), default: []].append($0.int(1))
+            }
+        }
+        return lists.reduce(into: [:]) { result, row in
+            result[row.key] = SourceSignals(isList: row.value, thread: conversations[row.key].flatMap { members[$0] } ?? [row.key])
+        }
+    }
+
+    public func correspondents() throws -> Set<String> {
+        let mine = Set(AppleAccounts.emailsByUUID(accountsDB: accountsDB).values)
+        guard !mine.isEmpty else { return [] }
+        let db = try openIndex()
+        var result = Set<String>()
+        try db.query("""
+            select distinct lower(ra.address) from messages m
+            join addresses sa on sa.ROWID = m.sender
+            join recipients r on r.message = m.ROWID
+            join addresses ra on ra.ROWID = r.address
+            where lower(sa.address) in (\(mine.map { _ in "?" }.joined(separator: ",")))
+            """, Array(mine)) { if let a = $0.text(0) { result.insert(a) } }
+        return result.subtracting(mine)
+    }
+
+    static func sqlList(_ ids: [Int64]) -> String { ids.map(String.init).joined(separator: ",") }
+
     public func parse(_ meta: MessageMeta) throws -> ParsedMessage {
         guard let path = try messageFile(meta.id) else { throw MailSourceError.messageFileMissing(meta.id) }
         let parsed = try AppleMailSource.parseFile(path: path, id: meta.id)

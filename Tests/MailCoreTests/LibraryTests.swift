@@ -25,6 +25,32 @@ final class LibraryTests: XCTestCase {
         XCTAssertTrue(try library.message(id: 1).meta.isRead)
     }
 
+    func testTraits() async throws {
+        let source = FakeSource(messages: [
+            .make(1, subject: "question", sender: "friend@example.com"),
+            .make(2, subject: "Re: question", sender: "me@example.com"),
+            .make(3, subject: "news", sender: "news@example.com"),
+            .make(4, subject: "ask", sender: "me@example.com"),
+        ])
+        source.threads = [[1, 2]]
+        source.lists = [3]
+        let library = try makeLibrary(source, embedder: nil)
+        try await library.sync()
+        let metas = try (1...4).map { try library.message(id: Int64($0)).meta }
+        let t = library.traits(metas)
+        XCTAssertEqual(t[1]?.knownSender, true)
+        XCTAssertEqual(t[1]?.repliedByMe, true)
+        XCTAssertEqual(t[1]?.threadCount, 2)
+        XCTAssertEqual(t[2]?.fromMe, true)
+        XCTAssertEqual(t[2]?.repliedByMe, false)
+        XCTAssertEqual(t[2]?.lastFromMe, true, "the user's reply is the latest: waiting for the friend")
+        XCTAssertEqual(t[3]?.isList, true)
+        XCTAssertEqual(t[3]?.knownSender, false)
+        XCTAssertEqual(t[3]?.lastFromMe, false)
+        XCTAssertEqual(t[4]?.lastFromMe, true)
+        XCTAssertEqual(try library.thread(1).map(\.meta.id), [1, 2])
+    }
+
     func testParseFailuresAreSkippedAndRetried() async throws {
         let source = FakeSource(messages: [.make(1, subject: "fine"), .make(2, subject: "broken")])
         source.failing = [2]
@@ -163,6 +189,17 @@ final class FakeSource: MailSource, @unchecked Sendable {
     func setRead(_ id: Int64) { lock.withLock { messages[id]?.meta.isRead = true } }
 
     func checkAccess() throws {}
+
+    var threads: [[Int64]] = []
+    var lists: Set<Int64> = []
+
+    func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals] {
+        Dictionary(uniqueKeysWithValues: ids.map { id in
+            (id, SourceSignals(isList: lists.contains(id), thread: threads.first { $0.contains(id) } ?? [id]))
+        })
+    }
+
+    func correspondents() throws -> Set<String> { ["friend@example.com"] }
 
     func listMessages() throws -> [MessageMeta] {
         lock.withLock { messages.values.map(\.meta).sorted { $0.date > $1.date } }

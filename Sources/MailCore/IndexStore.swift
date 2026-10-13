@@ -211,6 +211,26 @@ final class IndexStore: @unchecked Sendable {
             senderName: s.text(8), isRead: s.int(9) != 0, isFlagged: s.int(10) != 0, inInbox: s.int(11) != 0)
     }
 
+    func metas(_ ids: [Int64]) throws -> [Int64: MessageMeta] {
+        try read { db in
+            var result: [Int64: MessageMeta] = [:]
+            let statement = try db.prepare("SELECT \(Self.metaColumns) FROM messages m WHERE m.id=?")
+            for id in ids {
+                try statement.bind([.int(id)])
+                if try statement.step() { result[id] = Self.meta(statement) }
+            }
+            return result
+        }
+    }
+
+    func accounts() throws -> Set<String> {
+        try read { db in
+            var result = Set<String>()
+            try db.query("SELECT DISTINCT lower(account) FROM messages", []) { result.insert($0.text(0)) }
+            return result
+        }
+    }
+
     func metaAndBody(_ ids: [Int64]) throws -> [Int64: (meta: MessageMeta, body: String)] {
         try read { db in
             var result: [Int64: (meta: MessageMeta, body: String)] = [:]
@@ -224,17 +244,18 @@ final class IndexStore: @unchecked Sendable {
     }
 
     /// Newest messages in a browse box, with the start of their stored body.
-    func recent(_ box: BrowseBox, limit: Int) throws -> [(meta: MessageMeta, body: String)] {
-        let condition = switch box {
+    func recent(_ box: BrowseBox, limit: Int, offset: Int = 0, excludingFlagged: Bool = false) throws -> [(meta: MessageMeta, body: String)] {
+        var condition = switch box {
         case .inbox: "m.in_inbox = 1"
         case .archive: "m.in_inbox = 0"
         case .flagged: "m.is_flagged = 1"
         }
+        if excludingFlagged { condition += " AND m.is_flagged = 0" }
         return try read { db in
             var rows: [(meta: MessageMeta, body: String)] = []
             try db.query(
-                "SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m WHERE \(condition) ORDER BY m.date DESC LIMIT ?",
-                [.int(Int64(limit))]) { rows.append((Self.meta($0), $0.text(12))) }
+                "SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m WHERE \(condition) ORDER BY m.date DESC LIMIT ? OFFSET ?",
+                [.int(Int64(limit)), .int(Int64(offset))]) { rows.append((Self.meta($0), $0.text(12))) }
             return rows
         }
     }
@@ -254,22 +275,28 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
-    func senderStats(account: String?, limit: Int) throws -> [SenderStat] {
+    func senderStats(account: String?, after: Date? = nil, limit: Int) throws -> [SenderStat] {
         try read { db in
             var stats: [SenderStat] = []
             // The bare sender_name column takes its value from the max(date) row: the latest display name.
-            var sql = "SELECT sender_address, sender_name, account, count(*), max(date) FROM messages"
+            var sql = "SELECT sender_address, max(date), sender_name, account, count(*), sum(is_read = 0) FROM messages"
+            var conditions: [String] = []
             var args: [SQLValue] = []
             if let account {
-                sql += " WHERE account = ?"
+                conditions.append("account = ?")
                 args.append(.text(account))
             }
+            if let after {
+                conditions.append("date >= ?")
+                args.append(.double(after.timeIntervalSince1970))
+            }
+            if !conditions.isEmpty { sql += " WHERE " + conditions.joined(separator: " AND ") }
             sql += " GROUP BY account, lower(sender_address) ORDER BY count(*) DESC, max(date) DESC LIMIT ?"
             args.append(.int(Int64(limit)))
             try db.query(sql, args) {
                 stats.append(SenderStat(
-                    address: $0.text(0), name: $0.text(1), account: $0.text(2), count: Int($0.int(3)),
-                    latest: Date(timeIntervalSince1970: $0.double(4))))
+                    address: $0.text(0), name: $0.text(2), account: $0.text(3), count: Int($0.int(4)),
+                    unread: Int($0.int(5)), latest: Date(timeIntervalSince1970: $0.double(1))))
             }
             return stats
         }

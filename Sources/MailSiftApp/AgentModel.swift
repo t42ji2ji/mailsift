@@ -14,6 +14,12 @@ struct AgentProposal: Codable {
     var ids: [Int64]
     var reason: String
     var state: State = .pending
+    /// Per-message reasons, when the agent judged them one by one.
+    var notes: [Int64: String]?
+    /// Listed but left out of the action: the agent was unsure, or the user unticked them.
+    var unchecked: Set<Int64>?
+
+    var checked: [Int64] { ids.filter { unchecked?.contains($0) != true } }
 }
 
 /// A reply drafted by the agent, editable in the card and opened as a Mail compose window (never sent here).
@@ -84,7 +90,7 @@ final class AgentModel {
     /// Confirmed or dismissed proposals since the last turn, reported in the next turn's context.
     @ObservationIgnored private var outcomes: [String] = []
 
-    static let tools = ["search_mail", "read_mail", "list_recent", "list_senders", "index_status", "propose_action", "draft_reply"]
+    static let tools = ["search_mail", "read_mail", "read_thread", "list_recent", "list_senders", "index_status", "propose_action", "draft_reply"]
     static let workDir = MailLibrary.defaultDatabaseURL().deletingLastPathComponent().appendingPathComponent("agent")
 
     static let backendKey = "agentBackend"
@@ -443,10 +449,19 @@ final class AgentModel {
         }
         if name == "propose_action" {
             guard let action = (input["action"] as? String).flatMap(MailAction.init(rawValue:)) else { return }
-            var seen = Set<Int64>()
-            let ids = (input["ids"] as? [NSNumber] ?? []).map(\.int64Value).filter { seen.insert($0).inserted }
+            var seen = Set<Int64>(), notes: [Int64: String] = [:], unchecked = Set<Int64>()
+            var ids = (input["ids"] as? [NSNumber] ?? []).map(\.int64Value)
+            for item in input["items"] as? [[String: Any]] ?? [] {
+                guard let id = (item["id"] as? NSNumber)?.int64Value else { continue }
+                ids.append(id)
+                if let note = item["reason"] as? String, !note.isEmpty { notes[id] = note }
+                if item["checked"] as? Bool == false { unchecked.insert(id) }
+            }
+            ids = ids.filter { seen.insert($0).inserted }
             guard !ids.isEmpty else { return }
-            append(.proposal(AgentProposal(action: action, ids: ids, reason: input["reason"] as? String ?? "")), key: use.id)
+            append(.proposal(AgentProposal(action: action, ids: ids, reason: input["reason"] as? String ?? "",
+                                           notes: notes.isEmpty ? nil : notes, unchecked: unchecked.isEmpty ? nil : unchecked)),
+                   key: use.id)
             lookUp(ids)
             return
         }
@@ -460,9 +475,10 @@ final class AgentModel {
             let range = [(input["after"] as? String).map { "\($0) 起" }, (input["before"] as? String).map { "\($0) 前" }]
                 .compactMap { $0 }.joined(separator: "、")
             return range.isEmpty ? "列出最近的信" : "列出最近的信（\(range)）"
-        case "read_mail":
+        case "read_mail", "read_thread":
             let id = (input["id"] as? NSNumber)?.int64Value ?? 0
-            return "讀取 " + (refs[id].map { $0.subject.isEmpty ? $0.sender : $0.subject } ?? "#\(id)")
+            return (tool == "read_thread" ? "讀取對話串 " : "讀取 ")
+                + (refs[id].map { $0.subject.isEmpty ? $0.sender : $0.subject } ?? "#\(id)")
         case "list_senders": return "統計寄件者"
         case "index_status": return "查看索引狀態"
         default: return tool
@@ -489,20 +505,23 @@ final class AgentModel {
 
     func confirm(_ itemID: Int) {
         guard let i = items.firstIndex(where: { $0.id == itemID }), case .proposal(var proposal) = items[i].kind,
-              proposal.state == .pending, let lib = app.library else { return }
+              proposal.state == .pending, !proposal.checked.isEmpty, let lib = app.library else { return }
         proposal.state = .running
         items[i].kind = .proposal(proposal)
+        let ids = proposal.checked
+        let left = proposal.ids.filter { !ids.contains($0) }
+        let leftNote = left.isEmpty ? "" : " Left out by the user: \(left.map(String.init).joined(separator: ", "))."
         Task {
             do {
-                let report = try await lib.perform(proposal.action, ids: proposal.ids)
+                let report = try await lib.perform(proposal.action, ids: ids)
                 proposal.state = .done(succeeded: report.succeeded.count, failed: report.failed.count)
-                outcomes.append("User confirmed \(proposal.action.rawValue) on \(proposal.ids.count) messages: "
-                    + "\(report.succeeded.count) succeeded, \(report.failed.count) failed.")
+                outcomes.append("User confirmed \(proposal.action.rawValue) on \(ids.count) messages: "
+                    + "\(report.succeeded.count) succeeded, \(report.failed.count) failed." + leftNote)
                 applied(proposal.action, to: report.succeeded)
                 refreshSearch(after: proposal.action, succeeded: report.succeeded)
             } catch {
                 proposal.state = .failed(SearchModel.describe(error))
-                outcomes.append("User confirmed \(proposal.action.rawValue) on \(proposal.ids.count) messages; it failed: \(error.localizedDescription)")
+                outcomes.append("User confirmed \(proposal.action.rawValue) on \(ids.count) messages; it failed: \(error.localizedDescription)")
             }
             update(itemID) { $0 = proposal }
         }
@@ -513,6 +532,23 @@ final class AgentModel {
             guard proposal.state == .pending else { return }
             proposal.state = .cancelled
             outcomes.append("User declined \(proposal.action.rawValue) on \(proposal.ids.count) messages.")
+        }
+    }
+
+    /// Ticks or unticks one message of a pending proposal.
+    func toggle(_ itemID: Int, _ id: Int64) {
+        update(itemID) { proposal in
+            guard proposal.state == .pending else { return }
+            var unchecked = proposal.unchecked ?? []
+            if unchecked.remove(id) == nil { unchecked.insert(id) }
+            proposal.unchecked = unchecked
+        }
+    }
+
+    func toggleAll(_ itemID: Int) {
+        update(itemID) { proposal in
+            guard proposal.state == .pending else { return }
+            proposal.unchecked = proposal.checked.count == proposal.ids.count ? Set(proposal.ids) : []
         }
     }
 
@@ -621,9 +657,9 @@ final class AgentModel {
             "Now: \(Fmt.date.string(from: now)) \(weekday.string(from: now)), \(zone).",
             "",
             "Tools:",
-            "- list_recent for time-based questions (today, this week, unread, to-dos); search_mail for topics.",
-            "- read_mail before summarizing or quoting a specific message.",
-            "- To change mail (trash, archive, markRead, markUnread, flag, unflag, restore = move out of Trash back to the inbox) call propose_action with the ids and a short reason. The user confirms in the app. Never say mail was changed; say it is proposed.",
+            "- list_recent for time-based questions and triage; search_mail for topics. Their rows carry signals (list = newsletter or notification, known = the user has written to this sender, replied, awaiting = waiting for the other side's answer) and list_recent filters on them; mailbox all includes mail the user sent. Combine tools freely; for cleanup, list_senders shows who sends the most and how much stays unread.",
+            "- read_mail before summarizing or quoting a specific message; read_thread for the whole conversation.",
+            "- To change mail (trash, archive, markRead, markUnread, flag, unflag, restore = move out of Trash back to the inbox, junk = mark as spam and move to Spam) call propose_action. When you judged messages one by one, pass items with a few-word reason each, and checked false for ones you are unsure about. The user unticks what to keep and confirms in the app. Never say mail was changed; say it is proposed.",
             "- To draft a reply, read_mail first, then call draft_reply with the id and the reply text (in the original message's language unless asked). The user edits it and opens it in Mail; nothing is sent.",
             "- Every time you mention a specific message, write its id as [[id]], e.g. [[12345]]. The app turns it into a link that opens the message, with mail actions, and the link already shows sender and subject, so don't repeat them. Use only ids from tool results or the context; never refer to a message by subject alone. Put each listed message on its own line.",
         ]

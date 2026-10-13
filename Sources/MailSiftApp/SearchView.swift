@@ -73,14 +73,28 @@ struct SearchView: View {
         if let error = model.searchError {
             Message(symbol: "exclamationmark.circle", text: error)
         } else if model.query.isEmpty {
-            HitList(model: model, sections: DateSection.group(model.recent), showMatch: false)
-                .id(model.box)
-                .transition(.push(from: .trailing))
+            // Inbox is the bottom layer and never leaves; other boxes slide in over it and back out.
+            ZStack {
+                HitList(model: model, sections: inboxSections, showMatch: false, active: model.box == .inbox)
+                if model.box != .inbox {
+                    HitList(model: model, sections: DateSection.group(model.recent), showMatch: false)
+                        .background(Theme.paper)
+                        .id(model.box)
+                        .transition(.move(edge: .trailing))
+                        .zIndex(1)
+                }
+            }
         } else if model.hits.isEmpty, !model.searching {
             Message(symbol: "tray", text: "沒有結果")
         } else {
             HitList(model: model, sections: [DateSection(title: "\(model.hits.count) 封結果", hits: model.hits)], showMatch: true)
         }
+    }
+
+    /// Flagged mail pinned on top, showing its first rows, then the rest of the inbox by date.
+    private var inboxSections: [DateSection] {
+        let pinned = model.pinned.isEmpty ? [] : [DateSection(title: "旗標", hits: model.pinned, truncated: true)]
+        return pinned + DateSection.group(model.rows[.inbox, default: []])
     }
 }
 
@@ -88,6 +102,8 @@ struct SearchView: View {
 struct DateSection: Identifiable {
     let title: String
     let hits: [SearchHit]
+    /// Shows its first rows and a "顯示全部" that opens the whole box.
+    var truncated = false
     var id: String { title }
 
     /// 今天 / 昨天 / 本週 / 本月 / 更早, newest first, empty groups dropped.
@@ -110,67 +126,27 @@ struct DateSection: Identifiable {
     }
 }
 
-/// Sectioned, keyboard-navigable list. While browsing, long sections show their first rows; "顯示全部" pushes the
-/// whole section as a level of its own, with a back row to return.
+/// Sectioned, keyboard-navigable list. While browsing it pages in more mail at the end; the pinned section shows
+/// its first rows and "顯示全部" opens the flagged box over it.
 private struct HitList: View {
     @Bindable var model: SearchModel
     let sections: [DateSection]
     let showMatch: Bool
+    /// False while covered by another box: it keeps its place but takes no focus or keys.
+    var active = true
     var preview = 5
-    @State private var drilled: String?
     @FocusState private var focused: Bool
 
-    private var shown: [DateSection] {
-        guard let drilled, let section = sections.first(where: { $0.id == drilled }) else { return sections }
-        return [section]
-    }
-
     private func visible(_ section: DateSection) -> [SearchHit] {
-        showMatch || drilled != nil ? section.hits : Array(section.hits.prefix(preview))
+        section.truncated ? Array(section.hits.prefix(preview)) : section.hits
     }
 
     var body: some View {
-        Group {
-            if let drilled, shown.first?.id == drilled {
-                VStack(spacing: 0) {
-                    backRow(drilled)
-                    list.id(drilled)
-                }
-                .transition(.push(from: .trailing))
-            } else {
-                list.transition(.push(from: .leading))
-            }
-        }
-        .animation(.easeInOut(duration: 0.22), value: drilled)
-        .onKeyPress(.escape) {
-            guard drilled != nil else { return .ignored }
-            drilled = nil
-            return .handled
-        }
-    }
-
-    private func backRow(_ title: String) -> some View {
-        Button { drilled = nil } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
-                Text(title).font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text(Fmt.count(shown.first?.hits.count ?? 0) + " 封")
-                    .font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.muted)
-            }
-            .padding(.horizontal, 18)
-            .frame(height: 34)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var list: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(shown) { section in
-                        if drilled == nil { header(section) }
+                    ForEach(sections) { section in
+                        header(section)
                         ForEach(visible(section)) { hit in
                             HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch)
                                 .id(hit.id)
@@ -179,18 +155,24 @@ private struct HitList: View {
                                     focused = true
                                 }
                         }
-                        if !showMatch, drilled == nil, section.hits.count > preview { showAll(section) }
+                        if section.truncated, section.hits.count > preview { showAll(section) }
                     }
+                    if !showMatch { Color.clear.frame(height: 1).onAppear { model.loadMore() } }
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
             }
-            .focusable()
+            .focusable(active)
             .focusEffectDisabled()
             .focused($focused)
             .onKeyPress(.downArrow) { move(1, proxy) }
             .onKeyPress(.upArrow) { move(-1, proxy) }
             .onKeyPress(characters: .init(charactersIn: "jkesu#rRf")) { press in shortcut(press, proxy) }
+            .onKeyPress(.escape) {
+                guard model.box != .inbox else { return .ignored }
+                model.box = .inbox
+                return .handled
+            }
         }
     }
 
@@ -208,7 +190,7 @@ private struct HitList: View {
     }
 
     private func showAll(_ section: DateSection) -> some View {
-        Button { drilled = section.id } label: {
+        Button { model.box = .flagged } label: {
             HStack(spacing: 4) {
                 Text("顯示全部 \(Fmt.count(section.hits.count)) 封")
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
@@ -245,7 +227,7 @@ private struct HitList: View {
     }
 
     private func move(_ step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
-        let rows = shown.flatMap(visible)
+        let rows = sections.flatMap(visible)
         guard !rows.isEmpty else { return .ignored }
         let current = rows.firstIndex { $0.id == model.selection } ?? (step > 0 ? -1 : rows.count)
         let next = min(max(current + step, 0), rows.count - 1)

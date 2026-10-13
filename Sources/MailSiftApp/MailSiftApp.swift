@@ -182,6 +182,7 @@ struct MainView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .onChange(of: pane) { if case .box(let b) = pane { search.box = b } }
+        .onChange(of: search.box) { if case .box = pane { pane = .box(search.box) } }  // 顯示全部 and Esc switch boxes from the list
         .modifier(AgentDrawer(model: agent, hasMessage: search.message != nil) { id in
             // The current box, not Inbox: changing the box clears the selection.
             if case .box = pane {} else { pane = .box(search.box) }

@@ -159,8 +159,8 @@ public final class MailLibrary: @unchecked Sendable {
     }
 
     /// Newest messages, for browsing before any query.
-    public func recent(_ box: BrowseBox = .inbox, limit: Int = 400) -> [SearchHit] {
-        ((try? store.recent(box, limit: limit)) ?? []).map {
+    public func recent(_ box: BrowseBox = .inbox, limit: Int = 400, offset: Int = 0, excludingFlagged: Bool = false) -> [SearchHit] {
+        ((try? store.recent(box, limit: limit, offset: offset, excludingFlagged: excludingFlagged)) ?? []).map {
             SearchHit(meta: $0.meta, snippet: Searcher.snippet($0.body, terms: []), score: 0, match: .keyword)
         }
     }
@@ -192,9 +192,43 @@ public final class MailLibrary: @unchecked Sendable {
         return ParsedMessage(meta: row.meta, to: [], cc: [], bodyText: row.body, html: nil)
     }
 
-    /// Senders by message count (address compared case-insensitively, per account).
-    public func senders(account: String? = nil, limit: Int = 200) -> [SenderStat] {
-        (try? store.senderStats(account: account, limit: limit)) ?? []
+    /// Senders by message count (address compared case-insensitively, per account), optionally only since `after`.
+    public func senders(account: String? = nil, after: Date? = nil, limit: Int = 200) -> [SenderStat] {
+        (try? store.senderStats(account: account, after: after, limit: limit)) ?? []
+    }
+
+    /// Addresses (lowercased) the user has sent mail to.
+    public func correspondents() -> Set<String> {
+        (try? source.correspondents()) ?? []
+    }
+
+    /// Triage facts for these messages. A conversation only counts indexed messages: sent mail is in, trash and
+    /// spam are not.
+    public func traits(_ metas: [MessageMeta]) -> [Int64: MailTraits] {
+        let signals = (try? source.signals(metas.map(\.id))) ?? [:]
+        let known = correspondents()
+        let mine = (try? store.accounts()) ?? []
+        let members = (try? store.metas(Array(Set(signals.values.flatMap(\.thread))))) ?? [:]
+        func fromMe(_ m: MessageMeta) -> Bool { mine.contains(m.senderAddress.lowercased()) }
+        var result: [Int64: MailTraits] = [:]
+        for meta in metas {
+            let thread = (signals[meta.id]?.thread ?? []).compactMap { members[$0] }.sorted { $0.date < $1.date }
+            result[meta.id] = MailTraits(
+                isList: signals[meta.id]?.isList ?? false, fromMe: fromMe(meta),
+                knownSender: known.contains(meta.senderAddress.lowercased()),
+                threadCount: max(thread.count, 1),
+                repliedByMe: thread.contains { fromMe($0) && $0.date > meta.date },
+                lastFromMe: thread.last.map(fromMe) ?? fromMe(meta))
+        }
+        return result
+    }
+
+    /// The conversation `id` is in, oldest first, with stored body text.
+    public func thread(_ id: Int64) throws -> [ParsedMessage] {
+        let ids = (try source.signals([id]))[id]?.thread ?? [id]
+        return try store.metaAndBody(ids).values
+            .sorted { $0.meta.date < $1.meta.date }
+            .map { ParsedMessage(meta: $0.meta, to: [], cc: [], bodyText: $0.body, html: nil) }
     }
 
     /// Every indexed message from `address` (case-insensitive), newest first. Pass exactly these ids to `perform`.

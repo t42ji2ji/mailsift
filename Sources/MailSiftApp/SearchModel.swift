@@ -6,8 +6,12 @@ import Observation
 final class SearchModel {
     private(set) var query = ""
     private(set) var hits: [SearchHit] = []
-    /// Newest mail, shown while the query is empty.
-    private(set) var recent: [SearchHit] = []
+    /// Newest mail per mailbox while the query is empty, paged in as the list scrolls.
+    /// Inbox leaves out flagged mail: that is pinned above it, from `rows[.flagged]`.
+    private(set) var rows: [BrowseBox: [SearchHit]] = [:]
+    /// What the open box shows, top to bottom.
+    var recent: [SearchHit] { box == .inbox ? pinned + rows[.inbox, default: []] : rows[box, default: []] }
+    var pinned: [SearchHit] { rows[.flagged, default: []] }
     private(set) var searching = false
     private(set) var searchError: String?
 
@@ -24,6 +28,11 @@ final class SearchModel {
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var searchTask: Task<Void, Never>?
     @ObservationIgnored private var messageTask: Task<Void, Never>?
+    @ObservationIgnored private var exhausted: Set<BrowseBox> = []
+    @ObservationIgnored private var paging: Set<BrowseBox> = []
+    /// Each box keeps its own selection, so going back to one finds it as it was left.
+    @ObservationIgnored private var selections: [BrowseBox: Int64] = [:]
+    private static let page = 100
 
     init(app: AppModel) { self.app = app }
 
@@ -33,18 +42,38 @@ final class SearchModel {
     var box: BrowseBox = .inbox {
         didSet {
             guard box != oldValue else { return }
-            recent = []
-            selection = nil
-            loadRecent()
+            selections[oldValue] = selection
+            selection = selections[box]
+            if rows[box] == nil { loadRecent() }
         }
     }
 
+    /// Reloads Inbox, the pinned flagged mail and the open box, keeping as many rows as each already has.
     func loadRecent() {
         guard let lib = app.library else { return }
+        for box in Set([.inbox, .flagged, box]) {
+            // Flagged mail loads whole (a negative LIMIT is none in SQLite): the pinned section counts it.
+            let limit = box == .flagged ? -1 : max(rows[box]?.count ?? 0, Self.page)
+            Task {
+                let fresh = await Task.detached { lib.recent(box, limit: limit, excludingFlagged: box == .inbox) }.value
+                rows[box] = fresh
+                if box == .flagged || fresh.count < limit { exhausted.insert(box) } else { exhausted.remove(box) }
+            }
+        }
+    }
+
+    /// Appends the next page of the open box; called when the list scrolls to its end.
+    func loadMore() {
         let box = box
+        guard let lib = app.library, let loaded = rows[box]?.count, !exhausted.contains(box), !paging.contains(box) else { return }
+        paging.insert(box)
+        let page = Self.page
         Task {
-            let rows = await Task.detached { lib.recent(box) }.value
-            if box == self.box { recent = rows }
+            let next = await Task.detached { lib.recent(box, limit: page, offset: loaded, excludingFlagged: box == .inbox) }.value
+            paging.remove(box)
+            if next.count < page { exhausted.insert(box) }
+            let seen = Set(rows[box, default: []].map(\.id))
+            rows[box, default: []] += next.filter { !seen.contains($0.id) }
         }
     }
 
@@ -144,13 +173,16 @@ final class SearchModel {
         switch action {
         case .trash, .junk:
             hits.removeAll { $0.id == id }
-            recent.removeAll { $0.id == id }
+            for b in rows.keys { rows[b]!.removeAll { $0.id == id } }
             selection = nil
             app.refreshStatus()
         default:
             if let i = hits.firstIndex(where: { $0.id == id }) { update(&hits[i].meta) }
-            if let i = recent.firstIndex(where: { $0.id == id }) { update(&recent[i].meta) }
+            for b in rows.keys {
+                if let i = rows[b]!.firstIndex(where: { $0.id == id }) { update(&rows[b]![i].meta) }
+            }
             if message?.meta.id == id { update(&message!.meta) }
+            if action == .flag || action == .unflag { loadRecent() }  // moves it between the pinned section and the feed
         }
     }
 

@@ -133,6 +133,41 @@ public protocol MailSource: Sendable {
     func compose(_ kind: ComposeKind, id: Int64, body: String?) async throws
     /// Performs the action on exactly these message ids.
     func perform(_ action: MailAction, on ids: [Int64]) async throws -> ActionReport
+    /// Mailing-list membership and conversation for these ids; ids the source doesn't know are left out.
+    func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals]
+    /// Addresses (lowercased) the user has sent mail to.
+    func correspondents() throws -> Set<String>
+}
+
+public extension MailSource {
+    func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals] { [:] }
+    func correspondents() throws -> Set<String> { [] }
+}
+
+/// What the mail client knows beyond the headers MailSift indexes.
+public struct SourceSignals: Sendable {
+    /// Sent to a mailing list (List-Id): newsletters, notifications, groups.
+    public var isList: Bool
+    /// Every message in the same conversation, this one included.
+    public var thread: [Int64]
+
+    public init(isList: Bool, thread: [Int64]) {
+        self.isList = isList; self.thread = thread
+    }
+}
+
+/// Triage facts about one message, from the source's signals and the index.
+public struct MailTraits: Codable, Sendable {
+    public var isList: Bool
+    public var fromMe: Bool
+    /// The user has sent mail to this sender.
+    public var knownSender: Bool
+    /// Indexed messages in the conversation (trash and spam are not indexed).
+    public var threadCount: Int
+    /// The user wrote in the conversation after this message.
+    public var repliedByMe: Bool
+    /// The conversation's latest message is the user's: they are waiting for an answer.
+    public var lastFromMe: Bool
 }
 
 /// Turns text into L2-normalized vectors. Documents and queries use different task prefixes.
@@ -176,11 +211,13 @@ public struct SenderStat: Codable, Sendable, Identifiable {
     public var name: String
     public var account: String
     public var count: Int
+    public var unread: Int
     public var latest: Date
     public var id: String { account + "|" + address }
 
-    public init(address: String, name: String, account: String, count: Int, latest: Date) {
-        self.address = address; self.name = name; self.account = account; self.count = count; self.latest = latest
+    public init(address: String, name: String, account: String, count: Int, unread: Int = 0, latest: Date) {
+        self.address = address; self.name = name; self.account = account; self.count = count; self.unread = unread
+        self.latest = latest
     }
 }
 

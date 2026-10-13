@@ -113,7 +113,8 @@ struct AgentPanel: View {
     }
 
     private var suggestions: some View {
-        let prompts = ["整理今天的待辦", "列出可能的垃圾郵件", "把最近的信分類"] + (hasMessage ? ["摘要目前這封信"] : [])
+        let prompts = ["整理今天的待辦", "找出可能的垃圾郵件", "還沒回的信", "我寄出去還沒人回的", "很少讀的電子報"]
+            + (hasMessage ? ["摘要目前這封信"] : [])
         return VStack(alignment: .leading, spacing: 8) {
             Spacer()
             ForEach(prompts, id: \.self) { prompt in
@@ -264,8 +265,7 @@ private struct AgentRow: View {
             .font(.system(size: 12))
             .foregroundStyle(Theme.muted)
         case .proposal(let proposal):
-            ProposalCard(proposal: proposal, model: model, openMessage: openMessage,
-                         confirm: { model.confirm(item.id) }, dismiss: { model.dismiss(item.id) })
+            ProposalCard(proposal: proposal, itemID: item.id, model: model, openMessage: openMessage)
         case .draft(let draft):
             DraftCard(draft: draft, itemID: item.id, model: model, openMessage: openMessage)
         case .error(let text):
@@ -281,20 +281,39 @@ private struct AgentRow: View {
 
 private struct ProposalCard: View {
     let proposal: AgentProposal
+    let itemID: Int
     let model: AgentModel
     let openMessage: (Int64) -> Void
-    let confirm: () -> Void
-    let dismiss: () -> Void
-    @State private var expanded = false
+    @State private var expanded: Bool
 
     static let shown = 100
+
+    init(proposal: AgentProposal, itemID: Int, model: AgentModel, openMessage: @escaping (Int64) -> Void) {
+        self.proposal = proposal
+        self.itemID = itemID
+        self.model = model
+        self.openMessage = openMessage
+        // Judged one by one, or something left unticked: the list is the point, so it starts open.
+        _expanded = State(initialValue: proposal.notes != nil || proposal.unchecked != nil)
+    }
+
+    private var pending: Bool { proposal.state == .pending }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(AgentText.label(proposal.action)).font(.system(size: 13, weight: .semibold))
-                Text("\(Fmt.count(proposal.ids.count)) 封").font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.muted)
+                Text(pending && proposal.checked.count != proposal.ids.count
+                     ? "\(Fmt.count(proposal.checked.count)) / \(Fmt.count(proposal.ids.count)) 封"
+                     : "\(Fmt.count(proposal.ids.count)) 封")
+                    .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.muted)
                 Spacer()
+                if pending, expanded {
+                    Button(proposal.checked.count == proposal.ids.count ? "全不選" : "全選") { model.toggleAll(itemID) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.muted)
+                }
             }
             if !proposal.reason.isEmpty {
                 Text(proposal.reason).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
@@ -322,10 +341,28 @@ private struct ProposalCard: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(proposal.ids.prefix(Self.shown), id: \.self) { id in
-                MailRow(id: id, model: model, openMessage: openMessage) {
-                    Text(model.refs[id].map { "\($0.sender)　\($0.subject.isEmpty ? "（無主旨）" : $0.subject)" } ?? "#\(id)")
-                        .font(.system(size: 12))
-                        .lineLimit(1)
+                let on = proposal.unchecked?.contains(id) != true
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if pending {
+                        Button { model.toggle(itemID, id) } label: {
+                            Image(systemName: on ? "checkmark.square.fill" : "square")
+                                .font(.system(size: 13))
+                                .foregroundStyle(on ? Theme.ink : Theme.faint)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    MailRow(id: id, model: model, openMessage: openMessage) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(model.refs[id].map { "\($0.sender)　\($0.subject.isEmpty ? "（無主旨）" : $0.subject)" } ?? "#\(id)")
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+                            if let note = proposal.notes?[id] {
+                                Text(note).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(2)
+                            }
+                        }
+                        .opacity(on || !pending ? 1 : 0.5)
+                    }
                 }
             }
             if proposal.ids.count > Self.shown {
@@ -338,8 +375,12 @@ private struct ProposalCard: View {
         switch proposal.state {
         case .pending:
             HStack(spacing: 8) {
-                Button("確認", action: confirm).buttonStyle(InkButtonStyle())
-                Button("取消", action: dismiss).buttonStyle(LineButtonStyle())
+                Button(proposal.checked.count == proposal.ids.count ? "確認" : "確認 \(Fmt.count(proposal.checked.count)) 封") {
+                    model.confirm(itemID)
+                }
+                .buttonStyle(InkButtonStyle())
+                .disabled(proposal.checked.isEmpty)
+                Button("取消") { model.dismiss(itemID) }.buttonStyle(LineButtonStyle())
             }
         case .running:
             ProgressView().controlSize(.small)
