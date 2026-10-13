@@ -32,6 +32,26 @@ final class SendersModel {
     var selection = Set<String>()
 
     private(set) var loading = false
+
+    enum Mode { case map, table }
+    var mode: Mode = .map
+    private(set) var map: SenderMap?
+    private(set) var mapLoading = false
+
+    /// Computed once per launch (a few seconds); the layout doesn't need to follow every new message.
+    func loadMap() {
+        guard map == nil, !mapLoading, let lib = app.library else { return }
+        mapLoading = true
+        Task {
+            map = await Task.detached(priority: .userInitiated) { lib.senderMap() }.value
+            mapLoading = false
+        }
+    }
+
+    /// Message count of the selected senders.
+    var selectedMessages: Int {
+        all.filter { selection.contains($0.id) }.reduce(0) { $0 + $1.count }
+    }
     var plan: TrashPlan?
     private(set) var trashing: Int?
     var result: TrashResult?
@@ -63,7 +83,7 @@ final class SendersModel {
     /// Resolves the exact message ids per selected sender before asking for confirmation.
     func prepareTrash() {
         guard let lib = app.library else { return }
-        let stats = rows.filter { selection.contains($0.id) }
+        let stats = all.filter { selection.contains($0.id) }
         guard !stats.isEmpty else { return }
         Task {
             let lines = await Task.detached {

@@ -4,17 +4,19 @@ import SwiftUI
 struct SendersView: View {
     @Bindable var model: SendersModel
 
-    private var selectedCount: Int {
-        model.rows.filter { model.selection.contains($0.id) }.reduce(0) { $0 + $1.count }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if let error = model.error { ErrorStrip(text: error) }
-            table
+            switch model.mode {
+            case .table: table
+            case .map: mapArea
+            }
         }
-        .task { model.reload() }
+        .task {
+            model.reload()
+            model.loadMap()
+        }
         .sheet(item: $model.plan) { TrashConfirmSheet(model: model, plan: $0) }
     }
 
@@ -22,6 +24,7 @@ struct SendersView: View {
         VStack(alignment: .leading, spacing: 16) {
             Text("寄件者").font(.system(size: 26, weight: .semibold)).tracking(-0.4)
             HStack(spacing: 10) {
+                ModePicker(mode: $model.mode)
                 AccountPicker(accounts: model.accounts, selection: $model.account)
                 Spacer()
                 if let n = model.trashing {
@@ -36,7 +39,7 @@ struct SendersView: View {
                 Button {
                     model.prepareTrash()
                 } label: {
-                    Text(model.selection.isEmpty ? "移到垃圾桶" : "移到垃圾桶 · \(Fmt.count(selectedCount)) 封")
+                    Text(model.selection.isEmpty ? "移到垃圾桶" : "移到垃圾桶 · \(Fmt.count(model.selectedMessages)) 封")
                 }
                 .buttonStyle(InkButtonStyle())
                 .disabled(model.selection.isEmpty || model.trashing != nil)
@@ -45,6 +48,32 @@ struct SendersView: View {
         .padding(.horizontal, 28)
         .padding(.top, 44)
         .padding(.bottom, 16)
+    }
+
+    @ViewBuilder private var mapArea: some View {
+        if let map = model.map {
+            SenderMapView(model: model, map: map)
+                .background(Theme.canvas)
+                .overlay(alignment: .bottomLeading) {
+                    if !model.selection.isEmpty {
+                        HStack(spacing: 10) {
+                            Text("\(model.selection.count) 位寄件者 · \(Fmt.count(model.selectedMessages)) 封")
+                                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                            Button("清除選取") { model.selection = [] }.buttonStyle(LineButtonStyle())
+                        }
+                        .padding(10)
+                        .background(Theme.paper, in: RoundedRectangle(cornerRadius: 10))
+                        .hairlineBorder(10)
+                        .padding(16)
+                    }
+                }
+        } else {
+            VStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("計算寄件者地圖").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     private var table: some View {
@@ -77,6 +106,33 @@ struct SendersView: View {
         .tableStyle(.inset(alternatesRowBackgrounds: false))
         .scrollContentBackground(.hidden)
         .padding(.horizontal, 14)
+    }
+}
+
+private struct ModePicker: View {
+    @Binding var mode: SendersModel.Mode
+
+    var body: some View {
+        HStack(spacing: 2) {
+            pill("circle.hexagongrid", "地圖", .map)
+            pill("list.bullet", "列表", .table)
+        }
+        .padding(2)
+        .background(Theme.fill, in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func pill(_ symbol: String, _ title: String, _ value: SendersModel.Mode) -> some View {
+        let on = mode == value
+        return Button { mode = value } label: {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 12, weight: on ? .semibold : .regular))
+                .foregroundStyle(on ? Theme.paper : Theme.ink)
+                .padding(.horizontal, 10)
+                .frame(height: 24)
+                .background(on ? Theme.ink : .clear, in: RoundedRectangle(cornerRadius: 7))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
