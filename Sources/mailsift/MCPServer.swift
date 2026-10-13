@@ -18,9 +18,10 @@ final class MCPServer {
              ["query": str("What to look for, in any language"), "limit": int("Max results (default 20)"),
               "account": str("Only this account email"), "sender": str("Sender address or name contains"),
               "after": str("YYYY-MM-DD"), "before": str("YYYY-MM-DD")], required: ["query"]),
-        tool("list_recent", "Newest messages first, for time-based questions (today, this week, unread). Covers the newest \(recentWindow) indexed messages.",
+        tool("list_recent", "Newest messages first, for time-based questions (today, this week, unread). Covers the newest \(recentWindow) messages of one mailbox (Inbox by default).",
              ["limit": int("Max results (default 50)"), "after": str("YYYY-MM-DD, inclusive (local time)"),
-              "before": str("YYYY-MM-DD, exclusive (local time)"), "account": str("Only this account email")], required: []),
+              "before": str("YYYY-MM-DD, exclusive (local time)"), "account": str("Only this account email"),
+              "mailbox": str("inbox (default) | flagged | archive")], required: []),
         tool("read_mail", "Read one message in full (headers and plain-text body).",
              ["id": int("Message id from search_mail")], required: ["id"]),
         tool("list_senders", "Senders ranked by message count, for cleanup.",
@@ -37,6 +38,9 @@ final class MCPServer {
              ["action": str("trash | archive | markRead | markUnread | flag | unflag | restore"),
               "ids": ["type": "array", "items": ["type": "integer"], "description": "Message ids"],
               "reason": str("One short sentence: why these messages")], required: ["action", "ids", "reason"]),
+        tool("draft_reply", "Show the user a reply draft for one message. Does not send: the user edits it and opens it in Mail.",
+             ["id": int("Message id to reply to"), "body": str("The reply text only: no subject, no greeting quote of the original"),
+              "reply_all": ["type": "boolean", "description": "Reply to all recipients (default false)"]], required: ["id", "body"]),
         tool("index_status", "How much mail is indexed (keyword and semantic).", [:], required: []),
     ]
 
@@ -102,7 +106,8 @@ final class MCPServer {
             f.dateFormat = "yyyy-MM-dd"
             let after = (a["after"] as? String).flatMap(f.date), before = (a["before"] as? String).flatMap(f.date)
             let account = a["account"] as? String
-            let rows = library.recent(limit: Self.recentWindow).filter { hit in
+            let box = (a["mailbox"] as? String).flatMap(BrowseBox.init(rawValue:)) ?? .inbox
+            let rows = library.recent(box, limit: Self.recentWindow).filter { hit in
                 let m = hit.meta
                 return after.map { m.date >= $0 } ?? true && before.map { m.date < $0 } ?? true
                     && account.map { m.mailbox.account.caseInsensitiveCompare($0) == .orderedSame } ?? true
@@ -132,6 +137,9 @@ final class MCPServer {
             _ = try parseAction(a["action"])
             guard !(a["ids"] as? [Int] ?? []).isEmpty else { throw MailSourceError.other("ids is empty") }
             return "Proposal shown to the user; they will confirm in the app."
+        case "draft_reply":
+            guard a["id"] is Int, !(a["body"] as? String ?? "").isEmpty else { throw MailSourceError.other("id and body are required") }
+            return "Draft shown to the user; they can edit it and open it in Mail."
         case "index_status":
             return encode(library.status())
         default:

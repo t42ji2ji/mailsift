@@ -157,7 +157,9 @@ struct MainView: View {
         _spam = State(initialValue: TrashModel(app: app, role: .spam))
         let search = SearchModel(app: app)
         _search = State(initialValue: search)
-        _agent = State(initialValue: AgentModel(app: app, search: search))
+        let agent = AgentModel(app: app, search: search)
+        _agent = State(initialValue: agent)
+        search.requestDraft = { agent.requestDraft($0) }
     }
 
     var body: some View {
@@ -181,7 +183,8 @@ struct MainView: View {
         .ignoresSafeArea(.container, edges: .top)
         .onChange(of: pane) { if case .box(let b) = pane { search.box = b } }
         .modifier(AgentDrawer(model: agent, hasMessage: search.message != nil) { id in
-            if case .box = pane {} else { pane = .box(.inbox) }
+            // The current box, not Inbox: changing the box clears the selection.
+            if case .box = pane {} else { pane = .box(search.box) }
             search.selection = id
         })
         .overlay(alignment: .topLeading) {

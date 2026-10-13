@@ -2,32 +2,46 @@ import AppKit
 import MailCore
 import SwiftUI
 
-/// Floating assistant button (⌘J) and the right-hand drawer, laid over the main window's content.
+/// Floating assistant button (⌘J) and the right-hand drawer. When the window is wide enough the drawer pushes the
+/// content aside, so a message opened from the transcript stays visible; otherwise it lies over the content and
+/// closes when a message is opened.
 struct AgentDrawer: ViewModifier {
     let model: AgentModel
     let hasMessage: Bool
     let openMessage: (Int64) -> Void
-    @State private var open = false
+    @State private var width: CGFloat = 0
+
+    static let panelWidth: CGFloat = 400
+    /// Rail plus the narrowest message list.
+    static let minContent: CGFloat = 560
+
+    private var pushes: Bool { width - Self.panelWidth >= Self.minContent }
 
     func body(content: Content) -> some View {
         content
+            .padding(.trailing, model.isOpen && pushes ? Self.panelWidth : 0)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .overlay(alignment: .bottomTrailing) {
-                if !open {
+                if !model.isOpen {
                     AgentButton(backend: model.backend) { toggle() }
                         .keyboardShortcut("j", modifiers: .command)
                         .padding(20)
                 }
             }
             .overlay(alignment: .trailing) {
-                if open {
-                    AgentPanel(model: model, hasMessage: hasMessage, openMessage: openMessage) { toggle() }
+                if model.isOpen {
+                    AgentPanel(model: model, hasMessage: hasMessage, openMessage: open) { toggle() }
                         .transition(.move(edge: .trailing))
                 }
             }
+            .animation(.easeOut(duration: 0.18), value: model.isOpen)
     }
 
-    private func toggle() {
-        withAnimation(.easeOut(duration: 0.18)) { open.toggle() }
+    private func toggle() { model.isOpen.toggle() }
+
+    private func open(_ id: Int64) {
+        openMessage(id)
+        if !pushes { model.isOpen = false }
     }
 }
 
@@ -68,7 +82,7 @@ struct AgentPanel: View {
             if model.isEmpty { suggestions } else { transcript }
             composer
         }
-        .frame(width: 400)
+        .frame(width: AgentDrawer.panelWidth)
         .frame(maxHeight: .infinity)
         .background(Theme.paper)
         .overlay(alignment: .leading) { Rectangle().fill(Theme.hairline).frame(width: 1) }
@@ -197,7 +211,7 @@ private struct AgentRow: View {
         if case .user(let text) = item.kind {
             HStack {
                 Spacer(minLength: 48)
-                Text(text)
+                Text(model.plain(text))
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.paper)
                     .textSelection(.enabled)
@@ -223,11 +237,22 @@ private struct AgentRow: View {
         case .user:
             EmptyView()
         case .assistant(let text, _):
-            Text(AgentText.attributed(text, refs: model.refs))
-                .font(.system(size: 13))
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(Array(AgentStream.segments(text).enumerated()), id: \.offset) { _, segment in
+                    switch segment {
+                    case .text(let text):
+                        Text(AgentText.attributed(text, refs: model.refs))
+                            .font(.system(size: 13))
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .mail(let id, let line):
+                        MailRow(id: id, model: model, openMessage: openMessage) {
+                            Text(AgentText.attributed(line, refs: model.refs)).font(.system(size: 13)).lineSpacing(3)
+                        }
+                    }
+                }
+            }
         case .tool(let label, let running, let failed):
             HStack(spacing: 6) {
                 if running {
@@ -240,8 +265,10 @@ private struct AgentRow: View {
             .font(.system(size: 12))
             .foregroundStyle(Theme.muted)
         case .proposal(let proposal):
-            ProposalCard(proposal: proposal, refs: model.refs, openMessage: openMessage,
+            ProposalCard(proposal: proposal, model: model, openMessage: openMessage,
                          confirm: { model.confirm(item.id) }, dismiss: { model.dismiss(item.id) })
+        case .draft(let draft):
+            DraftCard(draft: draft, itemID: item.id, model: model, openMessage: openMessage)
         case .error(let text):
             HStack(alignment: .top, spacing: 6) {
                 Image(systemName: "exclamationmark.circle")
@@ -255,7 +282,7 @@ private struct AgentRow: View {
 
 private struct ProposalCard: View {
     let proposal: AgentProposal
-    let refs: [Int64: MailRef]
+    let model: AgentModel
     let openMessage: (Int64) -> Void
     let confirm: () -> Void
     let dismiss: () -> Void
@@ -296,16 +323,11 @@ private struct ProposalCard: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(proposal.ids.prefix(Self.shown), id: \.self) { id in
-                Button {
-                    openMessage(id)
-                } label: {
-                    Text(refs[id].map { "\($0.sender)　\($0.subject.isEmpty ? "（無主旨）" : $0.subject)" } ?? "#\(id)")
+                MailRow(id: id, model: model, openMessage: openMessage) {
+                    Text(model.refs[id].map { "\($0.sender)　\($0.subject.isEmpty ? "（無主旨）" : $0.subject)" } ?? "#\(id)")
                         .font(.system(size: 12))
                         .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
             }
             if proposal.ids.count > Self.shown {
                 Text("另外 \(Fmt.count(proposal.ids.count - Self.shown)) 封").font(.system(size: 12)).foregroundStyle(Theme.muted)
@@ -329,6 +351,156 @@ private struct ProposalCard: View {
             Text("已取消").font(.system(size: 12)).foregroundStyle(Theme.muted)
         case .failed(let message):
             Text(message).font(.system(size: 12)).foregroundStyle(Theme.muted).textSelection(.enabled)
+        }
+    }
+}
+
+/// A message named in the transcript: click opens it; on hover, 封存 / 垃圾桶 / 旗標 / 回覆 act on it right here.
+private struct MailRow<Label: View>: View {
+    let id: Int64
+    let model: AgentModel
+    let openMessage: (Int64) -> Void
+    @ViewBuilder let label: Label
+    @State private var hovering = false
+    @State private var confirmTrash = false
+
+    var body: some View {
+        let state = model.mailStates[id]
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                label
+                    .opacity(state?.removed == nil ? 1 : 0.45)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let removed = state?.removed {
+                    Text(Self.done(removed)).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
+            }
+            if let error = state?.error {
+                Text(error).font(.system(size: 11)).foregroundStyle(Theme.muted).textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(hovering ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(alignment: .topTrailing) {
+            if state?.busy == true {
+                ProgressView().controlSize(.mini).padding(4)
+            } else if hovering, state?.removed == nil {
+                actions.background(Theme.paper, in: RoundedRectangle(cornerRadius: 6)).hairlineBorder(6)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { openMessage(id) }
+        .onHover { hovering = $0 }
+        .help("開啟這封信")
+        .confirmationDialog("將這封郵件移到垃圾桶？", isPresented: $confirmTrash) {
+            Button("移到垃圾桶", role: .destructive) { model.act(.trash, on: id) }
+        }
+        .padding(.horizontal, -6)
+    }
+
+    private var actions: some View {
+        let flagged = model.refs[id]?.isFlagged ?? false
+        return HStack(spacing: 0) {
+            SmallAction(symbol: "archivebox", help: "封存") { model.act(.archive, on: id) }
+            SmallAction(symbol: "trash", help: "移到垃圾桶") { confirmTrash = true }
+            SmallAction(symbol: flagged ? "flag.fill" : "flag", help: flagged ? "移除旗標" : "加旗標") {
+                model.act(flagged ? .unflag : .flag, on: id)
+            }
+            SmallAction(symbol: "arrowshape.turn.up.left", help: "回覆") { model.reply(to: id) }
+        }
+    }
+
+    static func done(_ action: MailAction) -> String {
+        switch action {
+        case .archive: "已封存"
+        case .junk: "已標為垃圾郵件"
+        default: "已移到垃圾桶"
+        }
+    }
+}
+
+private struct SmallAction: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.ink)
+                .frame(width: 24, height: 22)
+                .background(hovering ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+    }
+}
+
+/// A reply the agent drafted: editable here, then opened as a Mail compose window. Nothing is sent from the app.
+private struct DraftCard: View {
+    let draft: AgentDraft
+    let itemID: Int
+    let model: AgentModel
+    let openMessage: (Int64) -> Void
+    @State private var text: String
+
+    init(draft: AgentDraft, itemID: Int, model: AgentModel, openMessage: @escaping (Int64) -> Void) {
+        self.draft = draft
+        self.itemID = itemID
+        self.model = model
+        self.openMessage = openMessage
+        _text = State(initialValue: draft.body)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(draft.replyAll ? "全部回覆草稿" : "回覆草稿").font(.system(size: 13, weight: .semibold))
+            MailRow(id: draft.id, model: model, openMessage: openMessage) {
+                Text(model.refs[draft.id].map { "給 \($0.sender)　Re: \($0.subject)" } ?? "#\(draft.id)")
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+            }
+            TextEditor(text: $text)
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 90, maxHeight: 240)
+                .padding(6)
+                .background(Theme.paper, in: RoundedRectangle(cornerRadius: 6))
+                .hairlineBorder(6)
+                .disabled(draft.state == .cancelled || draft.state == .opening)
+                .onChange(of: text) { model.editDraft(itemID, body: text) }
+            footer
+        }
+        .padding(12)
+        .background(Theme.canvas, in: RoundedRectangle(cornerRadius: Theme.radius))
+        .hairlineBorder()
+    }
+
+    @ViewBuilder private var footer: some View {
+        switch draft.state {
+        case .pending, .opened, .failed:
+            VStack(alignment: .leading, spacing: 6) {
+                if case .failed(let message) = draft.state {
+                    Text(message).font(.system(size: 12)).foregroundStyle(Theme.muted).textSelection(.enabled)
+                }
+                HStack(spacing: 8) {
+                    Button(draft.state == .opened ? "再次在 Mail 開啟" : "在 Mail 開啟") { model.openDraft(itemID) }
+                        .buttonStyle(InkButtonStyle())
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if draft.state != .opened {
+                        Button("取消") { model.cancelDraft(itemID) }.buttonStyle(LineButtonStyle())
+                    }
+                }
+            }
+        case .opening:
+            ProgressView().controlSize(.small)
+        case .cancelled:
+            Text("已取消").font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
     }
 }

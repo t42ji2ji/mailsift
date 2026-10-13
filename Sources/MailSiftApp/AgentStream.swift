@@ -175,6 +175,7 @@ struct MailRef: Equatable, Sendable {
     var id: Int64
     var sender: String
     var subject: String
+    var isFlagged: Bool?
 }
 
 extension AgentStream {
@@ -186,15 +187,42 @@ extension AgentStream {
             if let meta = row["meta"] as? [String: Any], let id = (meta["id"] as? NSNumber)?.int64Value {
                 let name = meta["senderName"] as? String ?? ""
                 return MailRef(id: id, sender: name.isEmpty ? meta["senderAddress"] as? String ?? "" : name,
-                               subject: meta["subject"] as? String ?? "")
+                               subject: meta["subject"] as? String ?? "", isFlagged: meta["isFlagged"] as? Bool)
             }
             if let id = (row["id"] as? NSNumber)?.int64Value, let sender = row["sender"] as? String {
                 // "Name <address>" → Name
                 let name = sender.components(separatedBy: " <").first ?? sender
-                return MailRef(id: id, sender: name, subject: row["subject"] as? String ?? "")
+                return MailRef(id: id, sender: name, subject: row["subject"] as? String ?? "", isFlagged: row["isFlagged"] as? Bool)
             }
             return nil
         }
+    }
+
+    /// Assistant text split for display: a line that names exactly one message becomes its own row (clickable,
+    /// with mail actions); everything else stays running text.
+    enum Segment: Equatable {
+        case text(String)
+        case mail(Int64, line: String)
+    }
+
+    static func segments(_ text: String) -> [Segment] {
+        var result: [Segment] = []
+        var pending: [String] = []
+        func flush() {
+            if !pending.isEmpty { result.append(.text(pending.joined(separator: "\n"))) }
+            pending = []
+        }
+        for line in text.components(separatedBy: "\n") {
+            let ids = Set(line.matches(of: refPattern).compactMap { Int64($0.1) })
+            if ids.count == 1, let id = ids.first {
+                flush()
+                result.append(.mail(id, line: line))
+            } else {
+                pending.append(line)
+            }
+        }
+        flush()
+        return result
     }
 
     /// Message ids written as `[[123]]`.

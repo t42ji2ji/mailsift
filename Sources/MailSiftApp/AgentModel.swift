@@ -16,12 +16,34 @@ struct AgentProposal {
     var state: State = .pending
 }
 
+/// A reply drafted by the agent, editable in the card and opened as a Mail compose window (never sent here).
+struct AgentDraft {
+    enum State: Equatable {
+        case pending, opening, opened, cancelled
+        case failed(String)
+    }
+
+    var id: Int64
+    var body: String
+    var replyAll: Bool
+    var state: State = .pending
+}
+
+/// What the user did to a message from the transcript.
+struct AgentMailState {
+    var busy = false
+    /// Set once the message left the list (trash, archive, junk).
+    var removed: MailAction?
+    var error: String?
+}
+
 struct AgentItem: Identifiable {
     enum Kind {
         case user(String)
         case assistant(String, streaming: Bool)
         case tool(String, running: Bool, failed: Bool)
         case proposal(AgentProposal)
+        case draft(AgentDraft)
         case error(String)
     }
 
@@ -44,6 +66,9 @@ final class AgentModel {
     /// Resolved CLIs; a backend missing here was not found. Empty until `resolveBackends()` finishes.
     private(set) var launchers: [AgentBackend: Launcher] = [:]
     private(set) var resolved = false
+    private(set) var mailStates: [Int64: AgentMailState] = [:]
+    /// The drawer; in the model so other views can open it (reader's "請助理擬回覆").
+    var isOpen = false
 
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private let search: SearchModel
@@ -59,7 +84,7 @@ final class AgentModel {
     /// Confirmed or dismissed proposals since the last turn, reported in the next turn's context.
     @ObservationIgnored private var outcomes: [String] = []
 
-    static let tools = ["search_mail", "read_mail", "list_recent", "list_senders", "index_status", "propose_action"]
+    static let tools = ["search_mail", "read_mail", "list_recent", "list_senders", "index_status", "propose_action", "draft_reply"]
     static let workDir = MailLibrary.defaultDatabaseURL().deletingLastPathComponent().appendingPathComponent("agent")
 
     static let backendKey = "agentBackend"
@@ -79,6 +104,13 @@ final class AgentModel {
     }
 
     var isEmpty: Bool { items.isEmpty }
+
+    /// Opens the drawer and asks for a reply draft to `id` (the open message is in the context).
+    func requestDraft(_ id: Int64) {
+        isOpen = true
+        guard !running else { return }
+        send("幫我擬 [[\(id)]] 的回覆")
+    }
 
     func newConversation() {
         cancel()
@@ -358,6 +390,12 @@ final class AgentModel {
     private func toolUse(_ use: AgentEvent.ToolUse) {
         let name = use.name.replacingOccurrences(of: "mcp__mailsift__", with: "")
         let input = AgentStream.object(use.input)
+        if name == "draft_reply" {
+            guard let id = (input["id"] as? NSNumber)?.int64Value, let body = input["body"] as? String else { return }
+            append(.draft(AgentDraft(id: id, body: body, replyAll: input["reply_all"] as? Bool ?? false)), key: use.id)
+            lookUp([id])
+            return
+        }
         if name == "propose_action" {
             guard let action = (input["action"] as? String).flatMap(MailAction.init(rawValue:)) else { return }
             var seen = Set<Int64>()
@@ -393,7 +431,9 @@ final class AgentModel {
         Task {
             let found = await Task.detached {
                 missing.compactMap { id in
-                    (try? lib.message(id: id)).map { MailRef(id: id, sender: Fmt.sender($0.meta), subject: $0.meta.subject) }
+                    (try? lib.message(id: id)).map {
+                        MailRef(id: id, sender: Fmt.sender($0.meta), subject: $0.meta.subject, isFlagged: $0.meta.isFlagged)
+                    }
                 }
             }.value
             for ref in found { refs[ref.id] = ref }
@@ -413,6 +453,7 @@ final class AgentModel {
                 proposal.state = .done(succeeded: report.succeeded.count, failed: report.failed.count)
                 outcomes.append("User confirmed \(proposal.action.rawValue) on \(proposal.ids.count) messages: "
                     + "\(report.succeeded.count) succeeded, \(report.failed.count) failed.")
+                applied(proposal.action, to: report.succeeded)
                 refreshSearch(after: proposal.action, succeeded: report.succeeded)
             } catch {
                 proposal.state = .failed(SearchModel.describe(error))
@@ -434,6 +475,78 @@ final class AgentModel {
         guard let i = items.firstIndex(where: { $0.id == itemID }), case .proposal(var proposal) = items[i].kind else { return }
         change(&proposal)
         items[i].kind = .proposal(proposal)
+    }
+
+    /// Mirrors a successful action on the transcript's mail rows.
+    private func applied(_ action: MailAction, to ids: [Int64]) {
+        for id in ids {
+            switch action {
+            case .trash, .archive, .junk: mailStates[id, default: .init()].removed = action
+            case .restore: mailStates[id, default: .init()].removed = nil
+            case .flag: refs[id]?.isFlagged = true
+            case .unflag: refs[id]?.isFlagged = false
+            case .markRead, .markUnread: break
+            }
+        }
+    }
+
+    // MARK: - Mail rows and drafts
+
+    /// One action on one message from a transcript row.
+    func act(_ action: MailAction, on id: Int64) {
+        guard mailStates[id]?.busy != true, let lib = app.library else { return }
+        mailStates[id, default: .init()].busy = true
+        mailStates[id]?.error = nil
+        Task {
+            do {
+                let report = try await lib.perform(action, ids: [id])
+                if let why = report.failed[id] { mailStates[id]?.error = why }
+                applied(action, to: report.succeeded)
+                refreshSearch(after: action, succeeded: report.succeeded)
+                if !report.succeeded.isEmpty { outcomes.append("User applied \(action.rawValue) to message \(id) from the transcript.") }
+            } catch {
+                mailStates[id]?.error = SearchModel.describe(error)
+            }
+            mailStates[id]?.busy = false
+        }
+    }
+
+    func reply(to id: Int64) {
+        guard let lib = app.library else { return }
+        Task {
+            do { try await lib.compose(.reply, id: id, body: nil) } catch {
+                mailStates[id, default: .init()].error = SearchModel.describe(error)
+            }
+        }
+    }
+
+    func editDraft(_ itemID: Int, body: String) {
+        updateDraft(itemID) { $0.body = body }
+    }
+
+    func openDraft(_ itemID: Int) {
+        guard let i = items.firstIndex(where: { $0.id == itemID }), case .draft(let draft) = items[i].kind,
+              draft.state == .pending || draft.state == .opened || draft.state.isFailure, let lib = app.library else { return }
+        updateDraft(itemID) { $0.state = .opening }
+        Task {
+            do {
+                try await lib.compose(draft.replyAll ? .replyAll : .reply, id: draft.id, body: draft.body)
+                updateDraft(itemID) { $0.state = .opened }
+                outcomes.append("User opened the reply draft for message \(draft.id) in Mail.")
+            } catch {
+                updateDraft(itemID) { $0.state = .failed(SearchModel.describe(error)) }
+            }
+        }
+    }
+
+    func cancelDraft(_ itemID: Int) {
+        updateDraft(itemID) { $0.state = .cancelled }
+    }
+
+    private func updateDraft(_ itemID: Int, _ change: (inout AgentDraft) -> Void) {
+        guard let i = items.firstIndex(where: { $0.id == itemID }), case .draft(var draft) = items[i].kind else { return }
+        change(&draft)
+        items[i].kind = .draft(draft)
     }
 
     private func refreshSearch(after action: MailAction, succeeded: [Int64]) {
@@ -464,7 +577,8 @@ final class AgentModel {
             "- list_recent for time-based questions (today, this week, unread, to-dos); search_mail for topics.",
             "- read_mail before summarizing or quoting a specific message.",
             "- To change mail (trash, archive, markRead, markUnread, flag, unflag, restore = move out of Trash back to the inbox) call propose_action with the ids and a short reason. The user confirms in the app. Never say mail was changed; say it is proposed.",
-            "- Refer to a message by writing [[id]], e.g. [[12345]]. The app renders it as a link showing sender and subject, so don't repeat them.",
+            "- To draft a reply, read_mail first, then call draft_reply with the id and the reply text (in the original message's language unless asked). The user edits it and opens it in Mail; nothing is sent.",
+            "- Every time you mention a specific message, write its id as [[id]], e.g. [[12345]]. The app turns it into a link that opens the message, with mail actions, and the link already shows sender and subject, so don't repeat them. Use only ids from tool results or the context; never refer to a message by subject alone. Put each listed message on its own line.",
         ]
         if !outcomes.isEmpty { lines += ["", "Since your last reply:"] + outcomes.map { "- " + $0 } }
 
@@ -473,12 +587,12 @@ final class AgentModel {
         lines.append(search.query.isEmpty ? "List: newest mail" : "Search query: \(search.query)")
         for hit in visible.prefix(30) {
             let m = hit.meta
-            refs[m.id] = MailRef(id: m.id, sender: Fmt.sender(m), subject: m.subject)
+            refs[m.id] = MailRef(id: m.id, sender: Fmt.sender(m), subject: m.subject, isFlagged: m.isFlagged)
             lines.append("\(m.id) | \(Fmt.date.string(from: m.date)) | \(Fmt.sender(m)) | \(m.subject)\(m.isRead ? "" : " | unread")")
         }
         if visible.isEmpty { lines.append("(empty)") }
         if let m = search.message {
-            refs[m.meta.id] = MailRef(id: m.meta.id, sender: Fmt.sender(m.meta), subject: m.meta.subject)
+            refs[m.meta.id] = MailRef(id: m.meta.id, sender: Fmt.sender(m.meta), subject: m.meta.subject, isFlagged: m.meta.isFlagged)
             lines += ["", "Open message:", "id: \(m.meta.id)",
                       "from: \(m.meta.senderName) <\(m.meta.senderAddress)>",
                       "date: \(Fmt.date.string(from: m.meta.date))",
@@ -490,6 +604,14 @@ final class AgentModel {
         return lines.joined(separator: "\n")
     }
 
+    /// Text with `[[id]]` replaced by the sender/subject label, for plain views (the user's bubble).
+    func plain(_ text: String) -> String {
+        text.replacing(AgentStream.refPattern) { match in
+            let id = Int64(match.1) ?? 0
+            return refs[id].map { $0.subject.isEmpty ? $0.sender : $0.subject } ?? "#\(id)"
+        }
+    }
+
     private func append(_ kind: AgentItem.Kind, key: String? = nil) {
         items.append(AgentItem(id: nextItem, key: key, kind: kind))
         nextItem += 1
@@ -498,4 +620,8 @@ final class AgentModel {
 
 private final class StderrBox: @unchecked Sendable {
     var data = Data()
+}
+
+extension AgentDraft.State {
+    var isFailure: Bool { if case .failed = self { true } else { false } }
 }
