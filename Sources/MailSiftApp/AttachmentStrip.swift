@@ -96,9 +96,7 @@ private struct AttachmentChip: View {
             HStack(spacing: 8) {
                 Image(nsImage: icon).resizable().frame(width: 22, height: 22)
                     .overlay(alignment: .bottomTrailing) {
-                        if downloading {
-                            ProgressView().controlSize(.mini)
-                        } else if !downloaded {
+                        if !downloaded, !downloading {
                             Image(systemName: "arrow.down.circle.fill")
                                 .font(.system(size: 11))
                                 .foregroundStyle(Theme.ink, Theme.paper)
@@ -115,6 +113,7 @@ private struct AttachmentChip: View {
             .frame(height: 40)
             .frame(maxWidth: 240, alignment: .leading)
             .background(hovering ? Theme.hover : Theme.fill, in: RoundedRectangle(cornerRadius: Theme.radius))
+            .overlay { if downloading { Shimmer().clipShape(RoundedRectangle(cornerRadius: Theme.radius)) } }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -132,6 +131,23 @@ private struct AttachmentChip: View {
         let size = attachment.size.map { Fmt.bytes(Int64($0)) }
         if downloading { return "下載中…" }
         return downloaded ? (size ?? attachment.mimeType) : "未下載" + (size.map { " · \($0)" } ?? "")
+    }
+}
+
+/// A soft highlight sweeping left to right, looping, for work in progress.
+private struct Shimmer: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            GeometryReader { geo in
+                let period = 1.4
+                let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+                let band = geo.size.width * 0.6
+                LinearGradient(colors: [.clear, Theme.ink.opacity(0.12), .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: band)
+                    .offset(x: -band + (geo.size.width + band) * t)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
