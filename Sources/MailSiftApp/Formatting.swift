@@ -16,14 +16,35 @@ enum Fmt {
 
     static func count(_ n: Int) -> String { n.formatted(.number) }
 
+    /// List dates: 14:20 today, 10/08 this year, 2022/06/30 otherwise.
+    static func short(_ d: Date) -> String {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        if cal.isDateInToday(d) {
+            f.dateFormat = "HH:mm"
+        } else if cal.isDateInYesterday(d) {
+            return "昨天"
+        } else if cal.component(.year, from: d) == cal.component(.year, from: .now) {
+            f.dateFormat = "M/d"
+        } else {
+            f.dateFormat = "yyyy/M/d"
+        }
+        return f.string(from: d)
+    }
+
+    /// Rail footnote about the model, nil once it is loaded.
+    static func modelNote(_ m: AppModel.ModelState) -> String? {
+        switch m {
+        case .notLoaded, .loaded: nil
+        case .loading(let file, let bytes): file.isEmpty ? "模型準備中" : "下載模型 \(bytes > 0 ? Fmt.bytes(bytes) : "")"
+        case .failed: "模型無法載入，僅關鍵字搜尋"
+        }
+    }
+
     static func bytes(_ n: Int64) -> String { ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
 
     static func sender(_ m: MessageMeta) -> String { m.senderName.isEmpty ? m.senderAddress : m.senderName }
 
-    /// 關鍵字 37,628/37,628 · 語意 12,400/37,628
-    static func indexLine(_ s: IndexStatus) -> String {
-        "關鍵字 \(count(s.keywordIndexed))/\(count(s.totalMessages)) · 語意 \(count(s.vectorIndexed))/\(count(s.totalMessages))"
-    }
 
     static func phase(_ p: IndexStatus.Phase) -> String {
         switch p {

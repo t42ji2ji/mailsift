@@ -9,81 +9,117 @@ struct MessageDetailView: View {
     var body: some View {
         Group {
             if let m = model.message {
-                VStack(alignment: .leading, spacing: 0) {
-                    headers(m).padding(12)
-                    if let error = model.actionError { errorLine(error) }
-                    Divider()
+                VStack(spacing: 0) {
+                    actionBar(m.meta, hasHTML: m.html != nil)
+                    if let error = model.actionError { ErrorStrip(text: error) }
                     if showHTML, let html = m.html {
+                        header(m).padding(.horizontal, 36).padding(.bottom, 18)
+                        Rectangle().fill(Theme.hairline).frame(height: 1)
                         HTMLBodyView(html: html)
                     } else {
                         ScrollView {
-                            Text(m.bodyText)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
+                            VStack(alignment: .leading, spacing: 26) {
+                                header(m)
+                                Rectangle().fill(Theme.hairline).frame(height: 1)
+                                Text(m.bodyText.isEmpty ? "（沒有文字內容）" : m.bodyText)
+                                    .font(.system(size: 14))
+                                    .lineSpacing(5)
+                                    .foregroundStyle(m.bodyText.isEmpty ? Theme.muted : Theme.ink)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxWidth: 720, alignment: .leading)
+                            .padding(.horizontal, 36)
+                            .padding(.bottom, 40)
+                            .frame(maxWidth: .infinity)
                         }
                     }
                 }
             } else if model.loadingMessage {
-                ProgressView()
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = model.actionError {
-                errorLine(error)
+                Message(symbol: "exclamationmark.circle", text: error)
             } else {
-                Color.clear
+                Image(systemName: "envelope")
+                    .font(.system(size: 28, weight: .ultraLight))
+                    .foregroundStyle(Theme.faint)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .toolbar { if model.message != nil { actions } }
         .confirmationDialog("將這封郵件移到垃圾桶？", isPresented: $confirmTrash) {
             Button("移到垃圾桶", role: .destructive) { model.perform(.trash) }
         }
     }
 
-    private func headers(_ m: ParsedMessage) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
-            row("寄件者", m.meta.senderName.isEmpty ? m.meta.senderAddress : "\(m.meta.senderName) <\(m.meta.senderAddress)>")
-            row("收件者", m.to.joined(separator: ", "))
-            if !m.cc.isEmpty { row("副本", m.cc.joined(separator: ", ")) }
-            row("日期", Fmt.date.string(from: m.meta.date))
-            row("信箱", "\(m.meta.mailbox.account) · \(m.meta.mailbox.name)")
-            row("主旨", m.meta.subject).fontWeight(.semibold)
+    private func header(_ m: ParsedMessage) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(m.meta.subject.isEmpty ? "（無主旨）" : m.meta.subject)
+                .font(.system(size: 22, weight: .semibold))
+                .tracking(-0.3)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 12) {
+                Monogram(name: Fmt.sender(m.meta))
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(Fmt.sender(m.meta)).font(.system(size: 13, weight: .semibold))
+                        if !m.meta.senderName.isEmpty {
+                            Text(m.meta.senderAddress).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        }
+                    }
+                    Text("給 " + (m.to.isEmpty ? "—" : m.to.joined(separator: ", ")) + (m.cc.isEmpty ? "" : "　副本 " + m.cc.joined(separator: ", ")))
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 12)
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text(Fmt.date.string(from: m.meta.date)).font(.system(size: 12).monospacedDigit())
+                    Text(m.meta.mailbox.account).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
+            }
         }
         .textSelection(.enabled)
+        .padding(.top, 6)
     }
 
-    private func row(_ label: String, _ value: String) -> some View {
-        GridRow {
-            Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
-            Text(value)
+    private func actionBar(_ meta: MessageMeta, hasHTML: Bool) -> some View {
+        HStack(spacing: 4) {
+            Spacer()
+            if model.actionRunning { ProgressView().controlSize(.mini).padding(.trailing, 6) }
+            if hasHTML {
+                IconButton(symbol: "doc.richtext", help: showHTML ? "顯示純文字" : "顯示 HTML", active: showHTML) { showHTML.toggle() }
+                Rectangle().fill(Theme.hairline).frame(width: 1, height: 16).padding(.horizontal, 4)
+            }
+            IconButton(symbol: "archivebox", help: "封存") { model.perform(.archive) }
+            IconButton(symbol: meta.isRead ? "envelope.badge" : "envelope.open", help: meta.isRead ? "標為未讀" : "標為已讀") {
+                model.perform(meta.isRead ? .markUnread : .markRead)
+            }
+            IconButton(symbol: meta.isFlagged ? "flag.fill" : "flag", help: meta.isFlagged ? "移除旗標" : "加旗標") {
+                model.perform(meta.isFlagged ? .unflag : .flag)
+            }
+            IconButton(symbol: "trash", help: "移到垃圾桶") { confirmTrash = true }
         }
+        .disabled(model.actionRunning)
+        .padding(.horizontal, 16)
+        .padding(.top, 38)
+        .padding(.bottom, 14)
     }
+}
 
-    private func errorLine(_ text: String) -> some View {
-        Text(text)
-            .foregroundStyle(.red)
-            .textSelection(.enabled)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-    }
+struct ErrorStrip: View {
+    let text: String
 
-    @ToolbarContentBuilder private var actions: some ToolbarContent {
-        let meta = model.message!.meta
-        ToolbarItemGroup {
-            if model.message?.html != nil {
-                Toggle(isOn: $showHTML) { Label("HTML", systemImage: "doc.richtext") }
-                    .help("HTML")
-            }
-            Button { confirmTrash = true } label: { Label("移到垃圾桶", systemImage: "trash") }
-                .help("移到垃圾桶")
-            Button { model.perform(.archive) } label: { Label("封存", systemImage: "archivebox") }
-                .help("封存")
-            Button { model.perform(meta.isRead ? .markUnread : .markRead) } label: {
-                Label(meta.isRead ? "標為未讀" : "標為已讀", systemImage: meta.isRead ? "envelope.badge" : "envelope.open")
-            }
-            .help(meta.isRead ? "標為未讀" : "標為已讀")
-            Button { model.perform(meta.isFlagged ? .unflag : .flag) } label: {
-                Label(meta.isFlagged ? "移除旗標" : "加旗標", systemImage: meta.isFlagged ? "flag.slash" : "flag")
-            }
-            .help(meta.isFlagged ? "移除旗標" : "加旗標")
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.circle.fill")
+            Text(text).textSelection(.enabled)
+            Spacer(minLength: 0)
         }
+        .font(.system(size: 12))
+        .padding(10)
+        .background(Theme.fill, in: RoundedRectangle(cornerRadius: Theme.radius))
+        .hairlineBorder()
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
     }
 }

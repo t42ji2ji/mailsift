@@ -1,24 +1,28 @@
 import AppKit
 import SwiftUI
 
-/// NSSearchField that reports text only when no IME composition is in progress (Zhuyin, Pinyin…):
+/// Borderless text field that reports text only when no IME composition is in progress (Zhuyin, Pinyin…):
 /// a 250 ms debounce after the last committed change, or immediately on Enter.
 struct IMESearchField: NSViewRepresentable {
     var prompt: String
     var onCommit: (String) -> Void
 
-    func makeNSView(context: Context) -> NSSearchField {
-        let field = NSSearchField()
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
         field.placeholderString = prompt
-        field.sendsSearchStringImmediately = false
-        field.sendsWholeSearchString = true
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 15)
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.usesSingleLineMode = true
         field.delegate = context.coordinator
         field.target = context.coordinator
         field.action = #selector(Coordinator.enter(_:))
         return field
     }
 
-    func updateNSView(_ field: NSSearchField, context: Context) {
+    func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.onCommit = onCommit
         field.placeholderString = prompt
     }
@@ -26,7 +30,7 @@ struct IMESearchField: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onCommit: onCommit) }
 
     @MainActor
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
+    final class Coordinator: NSObject, NSTextFieldDelegate {
         static let debounce: Duration = .milliseconds(250)
 
         var onCommit: (String) -> Void
@@ -50,7 +54,7 @@ struct IMESearchField: NSViewRepresentable {
             }
         }
 
-        @objc func enter(_ sender: NSSearchField) {
+        @objc func enter(_ sender: NSTextField) {
             guard !isComposing(sender) else { return }
             pending?.cancel()
             onCommit(sender.stringValue)
