@@ -165,6 +165,11 @@ public final class MailLibrary: @unchecked Sendable {
         }
     }
 
+    /// What is in Trash right now, straight from the source.
+    public func trash() -> [MessageMeta] {
+        (try? source.listTrash()) ?? []
+    }
+
     /// Full message from the source (with HTML); the stored text when the source cannot parse it.
     public func message(id: Int64) throws -> ParsedMessage {
         guard let row = try store.metaAndBody([id])[id] else { throw MailLibraryError.notIndexed(id) }
@@ -197,7 +202,7 @@ public final class MailLibrary: @unchecked Sendable {
         case .markUnread: try store.setFlags(done, isRead: false)
         case .flag: try store.setFlags(done, isFlagged: true)
         case .unflag: try store.setFlags(done, isFlagged: false)
-        case .archive: break  // the new mailbox is picked up by the next sync
+        case .archive, .restore: break  // the new mailbox is picked up by the next sync
         }
         return result
     }

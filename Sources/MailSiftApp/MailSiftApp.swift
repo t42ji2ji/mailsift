@@ -97,12 +97,13 @@ struct Wordmark: View {
 
 struct MainView: View {
     enum Pane: Hashable, CaseIterable {
-        case search, senders, status
+        case search, senders, trash, status
 
         var title: String {
             switch self {
             case .search: "Inbox"
             case .senders: "寄件者"
+            case .trash: "垃圾桶"
             case .status: "索引"
             }
         }
@@ -111,6 +112,7 @@ struct MainView: View {
             switch self {
             case .search: "tray"
             case .senders: "person.2"
+            case .trash: "trash"
             case .status: "circle.dashed"
             }
         }
@@ -119,7 +121,8 @@ struct MainView: View {
             switch self {
             case .search: "1"
             case .senders: "2"
-            case .status: "3"
+            case .trash: "3"
+            case .status: "4"
             }
         }
     }
@@ -129,11 +132,13 @@ struct MainView: View {
     @State private var showRail = true
     @State private var search: SearchModel
     @State private var senders: SendersModel
+    @State private var trash: TrashModel
     @State private var agent: AgentModel
 
     init(app: AppModel) {
         self.app = app
         _senders = State(initialValue: SendersModel(app: app))
+        _trash = State(initialValue: TrashModel(app: app))
         let search = SearchModel(app: app)
         _search = State(initialValue: search)
         _agent = State(initialValue: AgentModel(app: app, search: search))
@@ -149,6 +154,7 @@ struct MainView: View {
                 switch pane {
                 case .search: SearchView(app: app, model: search)
                 case .senders: SendersView(model: senders)
+                case .trash: TrashView(model: trash)
                 case .status: StatusView(app: app)
                 }
             }
@@ -181,7 +187,7 @@ struct MainView: View {
                 .padding(.leading, 10)
                 .padding(.top, 46)
                 .padding(.bottom, 22)
-            ForEach([Pane.search, .senders], id: \.self, content: railItem)
+            ForEach([Pane.search, .senders, .trash], id: \.self, content: railItem)
             Spacer()
             railItem(.status)
                 .padding(.bottom, 14)

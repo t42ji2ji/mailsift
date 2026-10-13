@@ -22,7 +22,7 @@ enum MailScript {
     static func statement(_ action: MailAction, message m: String, target: MailboxSpec?) -> String {
         switch action {
         case .trash: return "delete \(m)"
-        case .archive: return "move \(m) to \(target?.reference ?? "missing value")"
+        case .archive, .restore: return "move \(m) to \(target?.reference ?? "missing value")"
         case .markRead: return "set read status of \(m) to true"
         case .markUnread: return "set read status of \(m) to false"
         case .flag: return "set flagged status of \(m) to true"

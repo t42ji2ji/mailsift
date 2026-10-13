@@ -168,6 +168,8 @@ final class FakeSource: MailSource, @unchecked Sendable {
         lock.withLock { messages.values.map(\.meta).sorted { $0.date > $1.date } }
     }
 
+    func listTrash() throws -> [MessageMeta] { [] }
+
     func parse(_ meta: MessageMeta) throws -> ParsedMessage {
         try lock.withLock {
             _parseCount += 1

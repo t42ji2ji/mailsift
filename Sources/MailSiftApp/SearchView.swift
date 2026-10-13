@@ -98,25 +98,67 @@ struct DateSection: Identifiable {
     }
 }
 
-/// Sectioned, keyboard-navigable list. With `preview`, long sections show their first rows and expand on demand.
+/// Sectioned, keyboard-navigable list. While browsing, long sections show their first rows; "顯示全部" pushes the
+/// whole section as a level of its own, with a back row to return.
 private struct HitList: View {
     @Bindable var model: SearchModel
     let sections: [DateSection]
     let showMatch: Bool
     var preview = 5
-    @State private var expanded = Set<String>()
+    @State private var drilled: String?
     @FocusState private var focused: Bool
 
+    private var shown: [DateSection] {
+        guard let drilled, let section = sections.first(where: { $0.id == drilled }) else { return sections }
+        return [section]
+    }
+
     private func visible(_ section: DateSection) -> [SearchHit] {
-        showMatch || expanded.contains(section.id) ? section.hits : Array(section.hits.prefix(preview))
+        showMatch || drilled != nil ? section.hits : Array(section.hits.prefix(preview))
     }
 
     var body: some View {
+        Group {
+            if let drilled, shown.first?.id == drilled {
+                VStack(spacing: 0) {
+                    backRow(drilled)
+                    list.id(drilled)
+                }
+                .transition(.push(from: .trailing))
+            } else {
+                list.transition(.push(from: .leading))
+            }
+        }
+        .animation(.easeInOut(duration: 0.22), value: drilled)
+        .onKeyPress(.escape) {
+            guard drilled != nil else { return .ignored }
+            drilled = nil
+            return .handled
+        }
+    }
+
+    private func backRow(_ title: String) -> some View {
+        Button { drilled = nil } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text(Fmt.count(shown.first?.hits.count ?? 0) + " 封")
+                    .font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.muted)
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 34)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var list: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(sections) { section in
-                        header(section)
+                    ForEach(shown) { section in
+                        if drilled == nil { header(section) }
                         ForEach(visible(section)) { hit in
                             HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch)
                                 .id(hit.id)
@@ -125,7 +167,7 @@ private struct HitList: View {
                                     focused = true
                                 }
                         }
-                        if !showMatch, section.hits.count > preview { toggle(section) }
+                        if !showMatch, drilled == nil, section.hits.count > preview { showAll(section) }
                     }
                 }
                 .padding(.horizontal, 8)
@@ -152,14 +194,11 @@ private struct HitList: View {
         .padding(.bottom, 4)
     }
 
-    private func toggle(_ section: DateSection) -> some View {
-        let open = expanded.contains(section.id)
-        return Button {
-            if open { expanded.remove(section.id) } else { expanded.insert(section.id) }
-        } label: {
+    private func showAll(_ section: DateSection) -> some View {
+        Button { drilled = section.id } label: {
             HStack(spacing: 4) {
-                Text(open ? "收合" : "顯示全部 \(Fmt.count(section.hits.count)) 封")
-                Image(systemName: open ? "chevron.up" : "chevron.down").font(.system(size: 9, weight: .semibold))
+                Text("顯示全部 \(Fmt.count(section.hits.count)) 封")
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
             }
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Theme.muted)
@@ -171,7 +210,7 @@ private struct HitList: View {
     }
 
     private func move(_ step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
-        let rows = sections.flatMap(visible)
+        let rows = shown.flatMap(visible)
         guard !rows.isEmpty else { return .ignored }
         let current = rows.firstIndex { $0.id == model.selection } ?? (step > 0 ? -1 : rows.count)
         let next = min(max(current + step, 0), rows.count - 1)

@@ -51,6 +51,8 @@ public struct ParsedMessage: Codable, Sendable {
 
 public enum MailAction: String, Codable, Sendable, CaseIterable {
     case trash, archive, markRead, markUnread, flag, unflag
+    /// Move out of Trash back to the inbox.
+    case restore
 }
 
 public struct ActionReport: Codable, Sendable {
@@ -86,6 +88,8 @@ public protocol MailSource: Sendable {
     func checkAccess() throws
     /// Every searchable message (excludes trash, spam, drafts), newest first. Must be fast (metadata only).
     func listMessages() throws -> [MessageMeta]
+    /// Messages currently in Trash mailboxes, newest first (metadata only; not part of the index).
+    func listTrash() throws -> [MessageMeta]
     /// Full parse of one message.
     func parse(_ meta: MessageMeta) throws -> ParsedMessage
     /// Performs the action on exactly these message ids.

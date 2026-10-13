@@ -92,13 +92,21 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
     }
 
     public func listMessages() throws -> [MessageMeta] {
+        try list { !MailboxRoles.isExcluded($0) }
+    }
+
+    public func listTrash() throws -> [MessageMeta] {
+        try list { $0.role == .trash }
+    }
+
+    private func list(_ include: (AppleMailbox) -> Bool) throws -> [MessageMeta] {
         let db = try openIndex()
         let boxes = try mailboxes(db)
         let emails = AppleAccounts.emailsByUUID(accountsDB: accountsDB)
         let files = try messageFiles(refresh: true)
 
         var refs: [Int64: MailboxRef] = [:]
-        for (id, mb) in boxes where !MailboxRoles.isExcluded(mb) {
+        for (id, mb) in boxes where include(mb) {
             let account = mb.scheme == "local" ? "On My Mac" : emails[mb.accountUUID] ?? mb.accountUUID
             refs[id] = MailboxRef(id: id, account: account, name: mb.path, role: mb.role)
         }
@@ -264,6 +272,12 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
                     }
                     add(id, spec(mb), spec(archive))
                 }
+            case .restore:
+                guard mb.role == .trash else { noop.append(id); continue }
+                guard let inbox = (byAccount[mb.accountUUID] ?? []).first(where: { $0.role == .inbox }) else {
+                    failed[id] = "This account has no INBOX mailbox."; continue
+                }
+                add(id, spec(mb), spec(inbox))
             case .markRead, .markUnread, .flag, .unflag:
                 add(id, spec(mb), nil)
             }
