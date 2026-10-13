@@ -126,11 +126,11 @@ final class SearchModel {
             case .markUnread: meta.isRead = false
             case .flag: meta.isFlagged = true
             case .unflag: meta.isFlagged = false
-            case .trash, .archive, .restore: break
+            case .trash, .archive, .restore, .junk: break
             }
         }
         switch action {
-        case .trash:
+        case .trash, .junk:
             hits.removeAll { $0.id == id }
             recent.removeAll { $0.id == id }
             selection = nil

@@ -119,6 +119,13 @@ final class AppleMailStoreTests: XCTestCase {
             XCTAssertTrue(plan.jobs.allSatisfy { $0.target?.path == "INBOX" })
             XCTAssertEqual(Set(plan.jobs.map { MailboxRoles.role(forPath: $0.source.path) }), [.trash, .spam])
         }
+        // junk moves an inbox message to its account's Spam mailbox, and is a no-op on mail already in Spam.
+        if let m = try src.listMessages().first(where: \.inInbox), let j = spam.first {
+            let plan = try src.plan(.junk, ids: [m.id, j.id])
+            XCTAssertEqual(plan.noop, [j.id])
+            XCTAssertEqual(plan.jobs.flatMap(\.ids), [m.id])
+            XCTAssertEqual(plan.jobs.first.flatMap { MailboxRoles.role(forPath: $0.target?.path ?? "") }, .spam)
+        }
         let searchable = Set(try src.listMessages().map(\.id))
         XCTAssertTrue(searchable.isDisjoint(with: trash.map(\.id)) && searchable.isDisjoint(with: spam.map(\.id)))
     }

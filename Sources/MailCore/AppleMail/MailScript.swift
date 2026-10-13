@@ -23,6 +23,7 @@ enum MailScript {
         switch action {
         case .trash: return "delete \(m)"
         case .archive, .restore: return "move \(m) to \(target?.reference ?? "missing value")"
+        case .junk: return "set junk mail status of \(m) to true\n\t\t\tmove \(m) to \(target?.reference ?? "missing value")"
         case .markRead: return "set read status of \(m) to true"
         case .markUnread: return "set read status of \(m) to false"
         case .flag: return "set flagged status of \(m) to true"

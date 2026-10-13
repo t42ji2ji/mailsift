@@ -440,7 +440,7 @@ final class AgentModel {
         app.refreshStatus()
         search.loadRecent()
         if !search.query.isEmpty { search.submit(search.query) }
-        if [.trash, .archive].contains(action), let selected = search.selection, succeeded.contains(selected) {
+        if [.trash, .archive, .junk].contains(action), let selected = search.selection, succeeded.contains(selected) {
             search.selection = nil
         }
     }

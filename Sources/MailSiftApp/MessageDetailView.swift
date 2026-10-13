@@ -131,6 +131,7 @@ struct MessageDetailView: View {
                 Rectangle().fill(Theme.hairline).frame(width: 1, height: 16).padding(.horizontal, 4)
             }
             IconButton(symbol: "archivebox", help: "封存") { model.perform(.archive) }
+            IconButton(symbol: "xmark.bin", help: "標為垃圾郵件") { model.perform(.junk) }
             IconButton(symbol: meta.isRead ? "envelope.badge" : "envelope.open", help: meta.isRead ? "標為未讀" : "標為已讀") {
                 model.perform(meta.isRead ? .markUnread : .markRead)
             }

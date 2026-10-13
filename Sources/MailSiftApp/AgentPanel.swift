@@ -412,6 +412,7 @@ enum AgentText {
         case .flag: "加旗標"
         case .unflag: "移除旗標"
         case .restore: "還原"
+        case .junk: "標為垃圾郵件"
         }
     }
 

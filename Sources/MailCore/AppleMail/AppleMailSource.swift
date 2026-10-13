@@ -349,6 +349,12 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
                     failed[id] = "This account has no INBOX mailbox."; continue
                 }
                 add(id, spec(mb), spec(inbox))
+            case .junk:
+                if mb.role == .spam { noop.append(id); continue }
+                guard let spam = (byAccount[mb.accountUUID] ?? []).first(where: { $0.role == .spam }) else {
+                    failed[id] = "This account has no Spam mailbox."; continue
+                }
+                add(id, spec(mb), spec(spam))
             case .markRead, .markUnread, .flag, .unflag:
                 add(id, spec(mb), nil)
             }

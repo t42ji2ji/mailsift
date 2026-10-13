@@ -205,7 +205,7 @@ public final class MailLibrary: @unchecked Sendable {
         let result = try await source.perform(action, on: ids)
         let done = result.succeeded
         switch action {
-        case .trash:
+        case .trash, .junk:  // neither Trash nor Spam is indexed
             try store.delete(done)
             searcher.invalidate()
             try refreshCounts(nil) { $0.totalMessages = max($0.totalMessages - done.count, 0) }

@@ -78,6 +78,8 @@ public enum MailAction: String, Codable, Sendable, CaseIterable {
     case trash, archive, markRead, markUnread, flag, unflag
     /// Move out of Trash back to the inbox.
     case restore
+    /// Mark as junk and move to the account's Spam mailbox.
+    case junk
 }
 
 public struct ActionReport: Codable, Sendable {
