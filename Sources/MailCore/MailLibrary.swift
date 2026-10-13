@@ -173,6 +173,10 @@ public final class MailLibrary: @unchecked Sendable {
         try await source.downloadAttachment(meta, attachment)
     }
 
+    public func compose(_ kind: ComposeKind, id: Int64, body: String? = nil) async throws {
+        try await source.compose(kind, id: id, body: body)
+    }
+
     /// What is in Trash right now, straight from the source.
     public func trash() -> [MessageMeta] { mailbox(.trash) }
 

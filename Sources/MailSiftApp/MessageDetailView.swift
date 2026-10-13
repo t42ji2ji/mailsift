@@ -119,6 +119,15 @@ struct MessageDetailView: View {
     private func actionBar(_ meta: MessageMeta, hasHTML: Bool) -> some View {
         HStack(spacing: 4) {
             if let onBack { IconButton(symbol: "chevron.left", help: "回到列表", action: onBack) }
+            IconButton(symbol: "arrowshape.turn.up.left", help: "回覆（⌘R）") { model.compose(.reply) }
+                .keyboardShortcut("r", modifiers: .command)
+            IconButton(symbol: "arrowshape.turn.up.left.2", help: "全部回覆（⇧⌘R）") { model.compose(.replyAll) }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+            IconButton(symbol: "arrowshape.turn.up.right", help: "轉寄（⇧⌘F）") { model.compose(.forward) }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+            if let draft = model.requestDraft {
+                IconButton(symbol: "sparkles", help: "請助理擬回覆") { draft(meta.id) }
+            }
             Spacer()
             if model.actionRunning { ProgressView().controlSize(.mini).padding(.trailing, 6) }
             if hasHTML {

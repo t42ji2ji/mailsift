@@ -170,6 +170,8 @@ final class FakeSource: MailSource, @unchecked Sendable {
 
     func listMailbox(_ role: MailboxRole) throws -> [MessageMeta] { [] }
 
+    func compose(_ kind: ComposeKind, id: Int64, body: String?) async throws {}
+
     func parse(_ meta: MessageMeta) throws -> ParsedMessage {
         try lock.withLock {
             _parseCount += 1

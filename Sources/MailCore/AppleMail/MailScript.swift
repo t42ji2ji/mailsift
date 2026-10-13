@@ -69,6 +69,23 @@ enum MailScript {
         """
     }
 
+    /// Opens a reply or forward window (visible, not sent). `body` goes above the quoted original.
+    static func compose(_ kind: ComposeKind, id: Int64, source: MailboxSpec, body: String?) -> String {
+        let make = switch kind {
+        case .reply: "reply m with opening window"
+        case .replyAll: "reply m with opening window and reply to all"
+        case .forward: "forward m with opening window"
+        }
+        var lines = ["tell application \"Mail\"", "\tset m to «class mssg» id \(id) of \(source.reference)", "\tset r to \(make)"]
+        if let body, !body.isEmpty {
+            let literal = body.components(separatedBy: "\n").map { "\"" + escape($0) + "\"" }.joined(separator: " & return & ")
+            lines.append("\tdelay 0.3")
+            lines.append("\tset content of r to \(literal) & return & return & (content of r)")
+        }
+        lines += ["\tactivate", "end tell"]
+        return lines.joined(separator: "\n")
+    }
+
     /// Parses the script result into failures keyed by id.
     static func failures(fromOutput output: String) -> [Int64: String] {
         var out: [Int64: String] = [:]

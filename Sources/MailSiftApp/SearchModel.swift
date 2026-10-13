@@ -99,6 +99,18 @@ final class SearchModel {
         }
     }
 
+    /// Set by the main view: asks the assistant to draft a reply to this message.
+    @ObservationIgnored var requestDraft: ((Int64) -> Void)?
+
+    /// Opens a reply/forward window in Mail for the open message.
+    func compose(_ kind: ComposeKind, body: String? = nil) {
+        guard let id = selection, let lib = app.library else { return }
+        actionError = nil
+        Task {
+            do { try await lib.compose(kind, id: id, body: body) } catch { actionError = Self.describe(error) }
+        }
+    }
+
     func perform(_ action: MailAction) {
         guard let id = selection, let lib = app.library, !actionRunning else { return }
         actionRunning = true

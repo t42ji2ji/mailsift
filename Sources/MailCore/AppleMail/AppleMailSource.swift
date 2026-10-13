@@ -287,6 +287,14 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
     struct Plan { var jobs: [Job]; var noop: [Int64]; var failed: [Int64: String] }
 
     /// Resolves ids against the Envelope Index and groups them into scripts. No Mail.app calls.
+    public func compose(_ kind: ComposeKind, id: Int64, body: String?) async throws {
+        // A read-status plan resolves the message's mailbox without side effects.
+        guard let source = try plan(.markRead, ids: [id]).jobs.first?.source else {
+            throw MailSourceError.other("Message not found in Mail's index.")
+        }
+        _ = try await runScript(MailScript.compose(kind, id: id, source: source, body: body))
+    }
+
     func plan(_ action: MailAction, ids: [Int64]) throws -> Plan {
         let db = try openIndex()
         let boxes = try mailboxes(db)

@@ -82,6 +82,11 @@ public enum MailAction: String, Codable, Sendable, CaseIterable {
     case junk
 }
 
+/// Writing in Mail.app: it owns the accounts and sending, MailSift only opens the window.
+public enum ComposeKind: String, Codable, Sendable, CaseIterable {
+    case reply, replyAll, forward
+}
+
 public struct ActionReport: Codable, Sendable {
     public var action: MailAction
     public var succeeded: [Int64]
@@ -124,6 +129,8 @@ public protocol MailSource: Sendable {
     func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL
     /// Has the mail client fetch an attachment it hasn't downloaded yet, then returns a file with its content.
     func downloadAttachment(_ meta: MessageMeta, _ attachment: Attachment) async throws -> URL
+    /// Opens a reply/forward window for `id` in the mail client, with `body` above the quoted original. Never sends.
+    func compose(_ kind: ComposeKind, id: Int64, body: String?) async throws
     /// Performs the action on exactly these message ids.
     func perform(_ action: MailAction, on ids: [Int64]) async throws -> ActionReport
 }
