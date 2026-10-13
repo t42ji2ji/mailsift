@@ -14,6 +14,8 @@ enum Theme {
     static let fill = Color.primary.opacity(0.045)
     static let hover = Color.primary.opacity(0.07)
     static let selected = Color.primary.opacity(0.09)
+    /// The one accent: flags.
+    static let flag = Color(red: 0.84, green: 0.29, blue: 0.16)
 
     static let radius: CGFloat = 8
     static let railWidth: CGFloat = 196
@@ -67,6 +69,7 @@ struct IconButton: View {
     let symbol: String
     let help: String
     var active = false
+    var tint: Color?
     let action: () -> Void
     @State private var hovering = false
 
@@ -74,7 +77,7 @@ struct IconButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(active ? Theme.paper : Theme.ink)
+                .foregroundStyle(active ? Theme.paper : (tint ?? Theme.ink))
                 .frame(width: 30, height: 30)
                 .background(active ? Theme.ink : (hovering ? Theme.hover : .clear),
                             in: RoundedRectangle(cornerRadius: 7))

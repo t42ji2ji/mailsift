@@ -223,7 +223,7 @@ private struct HitRow: View {
                         .font(.system(size: 13))
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    if hit.meta.isFlagged { Image(systemName: "flag.fill").font(.system(size: 10)) }
+                    if hit.meta.isFlagged { Image(systemName: "flag.fill").font(.system(size: 10)).foregroundStyle(Theme.flag) }
                 }
                 HStack(alignment: .top, spacing: 6) {
                     Text(hit.snippet)

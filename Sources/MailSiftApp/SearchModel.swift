@@ -67,7 +67,9 @@ final class SearchModel {
             guard !Task.isCancelled, selection == id else { return }
             loadingMessage = false
             switch result {
-            case .success(let m): message = m
+            case .success(let m):
+                message = m
+                if !m.meta.isRead { perform(.markRead) }  // opening reads it, as in Mail
             case .failure(let e): actionError = e.localizedDescription
             }
         }

@@ -70,7 +70,8 @@ struct MessageDetailView: View {
                     .tracking(-0.3)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                IconButton(symbol: m.meta.isFlagged ? "flag.fill" : "flag", help: m.meta.isFlagged ? "移除旗標" : "加旗標") {
+                IconButton(symbol: m.meta.isFlagged ? "flag.fill" : "flag", help: m.meta.isFlagged ? "移除旗標" : "加旗標",
+                           tint: m.meta.isFlagged ? Theme.flag : nil) {
                     model.perform(m.meta.isFlagged ? .unflag : .flag)
                 }
                 .disabled(model.actionRunning)
