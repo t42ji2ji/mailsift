@@ -6,7 +6,11 @@ import MailCore
 /// and `perform_action` acts only on ids passed explicitly.
 final class MCPServer {
     let library: MailLibrary
-    init(library: MailLibrary) { self.library = library }
+    let modelReady: Task<Void, Never>
+    init(library: MailLibrary, modelReady: Task<Void, Never>) {
+        self.library = library
+        self.modelReady = modelReady
+    }
 
     static let tools: [[String: Any]] = [
         tool("search_mail", "Search the user's Apple Mail by meaning and keywords. Returns ids, dates, senders, subjects, snippets.",
@@ -69,6 +73,7 @@ final class MCPServer {
     func call(_ name: String, _ a: [String: Any]) async throws -> String {
         switch name {
         case "search_mail":
+            await modelReady.value
             let f = DateFormatter()
             f.dateFormat = "yyyy-MM-dd"
             let filter = SearchFilter(account: a["account"] as? String, sender: a["sender"] as? String,
