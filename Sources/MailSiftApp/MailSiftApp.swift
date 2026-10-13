@@ -97,7 +97,7 @@ struct Wordmark: View {
 
 struct MainView: View {
     enum Pane: Hashable, CaseIterable {
-        case search, senders, trash, status
+        case search, senders, trash, status, settings
 
         var title: String {
             switch self {
@@ -105,6 +105,7 @@ struct MainView: View {
             case .senders: "寄件者"
             case .trash: "垃圾桶"
             case .status: "索引"
+            case .settings: "設定"
             }
         }
 
@@ -114,6 +115,7 @@ struct MainView: View {
             case .senders: "person.2"
             case .trash: "trash"
             case .status: "circle.dashed"
+            case .settings: "gearshape"
             }
         }
 
@@ -123,6 +125,7 @@ struct MainView: View {
             case .senders: "2"
             case .trash: "3"
             case .status: "4"
+            case .settings: ","
             }
         }
     }
@@ -156,6 +159,7 @@ struct MainView: View {
                 case .senders: SendersView(model: senders)
                 case .trash: TrashView(model: trash)
                 case .status: StatusView(app: app)
+                case .settings: SettingsView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -190,6 +194,7 @@ struct MainView: View {
             ForEach([Pane.search, .senders, .trash], id: \.self, content: railItem)
             Spacer()
             railItem(.status)
+            railItem(.settings)
                 .padding(.bottom, 14)
         }
         .padding(.horizontal, 12)

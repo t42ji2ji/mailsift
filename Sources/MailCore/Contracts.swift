@@ -35,6 +35,26 @@ public struct MessageMeta: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
+public struct Attachment: Codable, Sendable, Hashable, Identifiable {
+    /// MIME part number as IMAP numbers it ("2", "2.3"); also the folder name Mail uses under Attachments/<id>/.
+    public var part: String
+    public var filename: String
+    public var mimeType: String
+    /// Decoded size in bytes when known.
+    public var size: Int?
+    /// Content-ID without angle brackets, for `cid:` references in the HTML.
+    public var contentID: String?
+    public var isInline: Bool
+    /// False when Mail has not downloaded the content yet (partial message, no file in Attachments/).
+    public var isDownloaded: Bool
+    public var id: String { part }
+
+    public init(part: String, filename: String, mimeType: String, size: Int?, contentID: String?, isInline: Bool, isDownloaded: Bool) {
+        self.part = part; self.filename = filename; self.mimeType = mimeType; self.size = size
+        self.contentID = contentID; self.isInline = isInline; self.isDownloaded = isDownloaded
+    }
+}
+
 public struct ParsedMessage: Codable, Sendable {
     public var meta: MessageMeta
     public var to: [String]
@@ -43,9 +63,11 @@ public struct ParsedMessage: Codable, Sendable {
     public var bodyText: String
     /// Original HTML part when present (for the reader view).
     public var html: String?
+    /// Every non-body part: files and inline images. Metadata only; content via `MailSource.attachmentFile`.
+    public var attachments: [Attachment]
 
-    public init(meta: MessageMeta, to: [String], cc: [String], bodyText: String, html: String?) {
-        self.meta = meta; self.to = to; self.cc = cc; self.bodyText = bodyText; self.html = html
+    public init(meta: MessageMeta, to: [String], cc: [String], bodyText: String, html: String?, attachments: [Attachment] = []) {
+        self.meta = meta; self.to = to; self.cc = cc; self.bodyText = bodyText; self.html = html; self.attachments = attachments
     }
 }
 
@@ -92,6 +114,9 @@ public protocol MailSource: Sendable {
     func listTrash() throws -> [MessageMeta]
     /// Full parse of one message.
     func parse(_ meta: MessageMeta) throws -> ParsedMessage
+    /// A readable file with the attachment's content: Mail's own copy when it exists, otherwise decoded from the
+    /// message into a cache folder. Throws when the content isn't on disk (not downloaded by Mail yet).
+    func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL
     /// Performs the action on exactly these message ids.
     func perform(_ action: MailAction, on ids: [Int64]) async throws -> ActionReport
 }

@@ -165,6 +165,10 @@ public final class MailLibrary: @unchecked Sendable {
         }
     }
 
+    public func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL {
+        try source.attachmentFile(meta, attachment)
+    }
+
     /// What is in Trash right now, straight from the source.
     public func trash() -> [MessageMeta] {
         (try? source.listTrash()) ?? []

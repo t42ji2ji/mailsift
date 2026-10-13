@@ -6,7 +6,10 @@ struct MessageDetailView: View {
     /// Shown as a back button when the message has taken over the list.
     var onBack: (() -> Void)? = nil
     @State private var plainText = false
-    @State private var remoteImages = false
+    @AppStorage(SettingsView.loadRemoteKey) private var loadRemoteByDefault = true
+    /// This message only; nil follows the setting.
+    @State private var remoteOverride: Bool?
+    private var remoteImages: Bool { remoteOverride ?? loadRemoteByDefault }
     @State private var confirmTrash = false
     @State private var showDetails = false
 
@@ -54,7 +57,7 @@ struct MessageDetailView: View {
         }
         .onChange(of: model.message?.meta.id) {
             plainText = false
-            remoteImages = false
+            remoteOverride = nil
             showDetails = false
         }
         .confirmationDialog("將這封郵件移到垃圾桶？", isPresented: $confirmTrash) {
@@ -120,7 +123,7 @@ struct MessageDetailView: View {
             if hasHTML {
                 if !plainText {
                     IconButton(symbol: remoteImages ? "photo.fill" : "photo", help: remoteImages ? "封鎖遠端圖片" : "載入遠端圖片", active: remoteImages) {
-                        remoteImages.toggle()
+                        remoteOverride = !remoteImages
                     }
                 }
                 IconButton(symbol: "text.alignleft", help: plainText ? "顯示原始版面" : "顯示純文字", active: plainText) { plainText.toggle() }
