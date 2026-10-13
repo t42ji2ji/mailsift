@@ -217,12 +217,15 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
-    /// Newest messages with their stored body.
+    /// The newest `limit` messages plus every flagged one, with their stored body, newest first.
     func recent(limit: Int) throws -> [(meta: MessageMeta, body: String)] {
         try read { db in
             var rows: [(meta: MessageMeta, body: String)] = []
-            try db.query("SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m ORDER BY m.date DESC LIMIT ?",
-                         [.int(Int64(limit))]) { rows.append((Self.meta($0), $0.text(11))) }
+            try db.query("""
+                SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m
+                WHERE m.is_flagged = 1 OR m.id IN (SELECT id FROM messages ORDER BY date DESC LIMIT ?)
+                ORDER BY m.date DESC
+                """, [.int(Int64(limit))]) { rows.append((Self.meta($0), $0.text(11))) }
             return rows
         }
     }

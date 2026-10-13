@@ -129,11 +129,14 @@ struct MainView: View {
     @State private var showRail = true
     @State private var search: SearchModel
     @State private var senders: SendersModel
+    @State private var agent: AgentModel
 
     init(app: AppModel) {
         self.app = app
-        _search = State(initialValue: SearchModel(app: app))
         _senders = State(initialValue: SendersModel(app: app))
+        let search = SearchModel(app: app)
+        _search = State(initialValue: search)
+        _agent = State(initialValue: AgentModel(app: app, search: search))
     }
 
     var body: some View {
@@ -152,6 +155,10 @@ struct MainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .ignoresSafeArea(.container, edges: .top)
+        .modifier(AgentDrawer(model: agent, hasMessage: search.message != nil) { id in
+            pane = .search
+            search.selection = id
+        })
         .overlay(alignment: .topLeading) {
             // Sits in the title bar row, right of the traffic lights.
             IconButton(symbol: "sidebar.left", help: showRail ? "隱藏側邊欄" : "顯示側邊欄") {

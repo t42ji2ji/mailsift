@@ -1,0 +1,432 @@
+import Foundation
+import MailCore
+import Observation
+
+/// A proposed mail change, shown as a card until the user confirms or dismisses it.
+struct AgentProposal {
+    enum State: Equatable {
+        case pending, running, cancelled
+        case done(succeeded: Int, failed: Int)
+        case failed(String)
+    }
+
+    var action: MailAction
+    var ids: [Int64]
+    var reason: String
+    var state: State = .pending
+}
+
+struct AgentItem: Identifiable {
+    enum Kind {
+        case user(String)
+        case assistant(String, streaming: Bool)
+        case tool(String, running: Bool, failed: Bool)
+        case proposal(AgentProposal)
+        case error(String)
+    }
+
+    let id: Int
+    /// Assistant text: "messageID#index"; tool and proposal: the tool_use id.
+    var key: String?
+    var kind: Kind
+}
+
+/// The in-app assistant: runs the local Claude Code CLI headless with the mailsift MCP server, one process per turn
+/// (`--resume` continues the conversation), and turns its stream into transcript items. Mail changes arrive as
+/// `propose_action` calls and are performed here only after the user confirms.
+@MainActor @Observable
+final class AgentModel {
+    private(set) var items: [AgentItem] = []
+    private(set) var running = false
+    /// Sender and subject per message id, from context, tool results and lookups; for `[[id]]` links.
+    private(set) var refs: [Int64: MailRef] = [:]
+
+    @ObservationIgnored private let app: AppModel
+    @ObservationIgnored private let search: SearchModel
+    @ObservationIgnored private var sessionID: String?
+    @ObservationIgnored private var process: Process?
+    @ObservationIgnored private var run = 0
+    @ObservationIgnored private var nextItem = 0
+    @ObservationIgnored private var sawResult = false
+    /// An error result without text; the cause is then on stderr.
+    @ObservationIgnored private var silentError: String?
+    /// Messages whose text arrived as deltas; their full `assistant` event only finalizes those items.
+    @ObservationIgnored private var streamed = Set<String>()
+    /// Confirmed or dismissed proposals since the last turn, reported in the next turn's context.
+    @ObservationIgnored private var outcomes: [String] = []
+    @ObservationIgnored private var launcher: Launcher?
+
+    static let tools = ["search_mail", "read_mail", "list_recent", "list_senders", "index_status", "propose_action"]
+    static let workDir = MailLibrary.defaultDatabaseURL().deletingLastPathComponent().appendingPathComponent("agent")
+
+    init(app: AppModel, search: SearchModel) {
+        self.app = app
+        self.search = search
+    }
+
+    var isEmpty: Bool { items.isEmpty }
+
+    func newConversation() {
+        cancel()
+        items = []
+        sessionID = nil
+        streamed = []
+        outcomes = []
+    }
+
+    func cancel() {
+        guard running else { return }
+        run += 1  // drop whatever the old process still prints
+        process?.terminate()
+        process = nil
+        finishTurn()
+    }
+
+    func send(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !running else { return }
+        append(.user(text))
+        running = true
+        sawResult = false
+        silentError = nil
+        run += 1
+        let run = run
+        let system = systemPrompt()
+        outcomes = []
+        Task {
+            guard let launcher = await resolveLauncher() else {
+                guard run == self.run else { return }
+                append(.error("找不到 Claude Code。安裝並登入（在終端機執行 claude）後再試。"))
+                finishTurn()
+                return
+            }
+            guard run == self.run else { return }
+            start(launcher, prompt: text, system: system, run: run)
+        }
+    }
+
+    // MARK: - Process
+
+    struct Launcher {
+        var claude: String
+        var path: String
+    }
+
+    /// Apps started from Finder get a minimal PATH; ask the login shell, then the usual install locations
+    /// (`~/.local/bin` is often only added in .zshrc, which a non-interactive login shell skips).
+    private func resolveLauncher() async -> Launcher? {
+        if let launcher { return launcher }
+        let found = await Task.detached { () -> Launcher? in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            p.arguments = ["-lc", "command -v claude; print -r -- $PATH"]
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = FileHandle.nullDevice
+            p.standardInput = FileHandle.nullDevice
+            var lines: [String] = []
+            if (try? p.run()) != nil {
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+            }
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let candidates = lines.filter { $0.hasSuffix("/claude") }
+                + ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+            guard let claude = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+            let path = lines.last { $0.contains(":") } ?? ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+            return Launcher(claude: claude, path: (claude as NSString).deletingLastPathComponent + ":" + path)
+        }.value
+        launcher = found
+        return found
+    }
+
+    private func arguments(system: String) -> [String] {
+        let mcp: [String: Any] = ["mcpServers": ["mailsift": ["command": CLIPath.url.path, "args": ["mcp"]]]]
+        let mcpJSON = String(decoding: try! JSONSerialization.data(withJSONObject: mcp), as: UTF8.self)
+        var args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                    "--strict-mcp-config", "--mcp-config", mcpJSON,
+                    "--tools", "",
+                    "--allowedTools", Self.tools.map { "mcp__mailsift__" + $0 }.joined(separator: ","),
+                    "--disallowedTools", "mcp__mailsift__perform_action,mcp__mailsift__preview_action",
+                    "--setting-sources", "project", "--model", "sonnet",
+                    "--append-system-prompt", system]
+        if let sessionID { args += ["--resume", sessionID] }
+        return args
+    }
+
+    private func start(_ launcher: Launcher, prompt: String, system: String, run: Int) {
+        try? FileManager.default.createDirectory(at: Self.workDir, withIntermediateDirectories: true)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: launcher.claude)
+        p.arguments = arguments(system: system)
+        p.currentDirectoryURL = Self.workDir
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = launcher.path
+        p.environment = env
+        // The prompt goes through stdin so text starting with "-" is never read as an option.
+        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        p.standardInput = stdin
+        p.standardOutput = stdout
+        p.standardError = stderr
+        do {
+            try p.run()
+        } catch {
+            append(.error("無法啟動 Claude Code：\(error.localizedDescription)"))
+            finishTurn()
+            return
+        }
+        process = p
+        stdin.fileHandleForWriting.write(Data(prompt.utf8))
+        try? stdin.fileHandleForWriting.close()
+
+        // Blocking reads on their own threads; stderr is drained concurrently so a chatty child cannot stall.
+        let errors = StderrBox()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global().async {
+            errors.data = stderr.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        DispatchQueue.global().async {
+            var buffer = AgentStream.LineBuffer()
+            let out = stdout.fileHandleForReading
+            while true {
+                let data = out.availableData
+                let lines = data.isEmpty ? buffer.finish() : buffer.append(data)
+                let events = lines.map(AgentStream.parse).filter { $0 != .ignored }
+                if !events.isEmpty {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { events.forEach { self.handle($0, run: run) } } }
+                }
+                if data.isEmpty { break }
+            }
+            p.waitUntilExit()
+            group.wait()
+            let status = p.terminationStatus
+            let stderrText = String(decoding: errors.data, as: UTF8.self)
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.exited(status: status, stderr: stderrText, run: run) } }
+        }
+    }
+
+    private func exited(status: Int32, stderr: String, run: Int) {
+        guard run == self.run else { return }
+        process = nil
+        if !sawResult || silentError != nil {
+            let line = stderr.split(separator: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            append(.error(line.map { String($0.prefix(300)) } ?? silentError ?? "Claude Code 已結束（代碼 \(status)）"))
+        }
+        finishTurn()
+    }
+
+    private func finishTurn() {
+        running = false
+        for i in items.indices {
+            switch items[i].kind {
+            case .assistant(let text, true): items[i].kind = .assistant(text, streaming: false)
+            case .tool(let label, true, let failed): items[i].kind = .tool(label, running: false, failed: failed)
+            default: break
+            }
+        }
+    }
+
+    // MARK: - Stream events
+
+    func handle(_ event: AgentEvent, run: Int) {
+        guard run == self.run else { return }
+        switch event {
+        case .initialized(let session, let mcp):
+            sessionID = session
+            if mcp != "connected" { append(.error("MailSift 工具無法連線（\(mcp ?? "未啟動")）")) }
+
+        case .textDelta(let message, let index, let text):
+            streamed.insert(message)
+            let key = "\(message)#\(index)"
+            if let i = items.lastIndex(where: { $0.key == key }), case .assistant(let old, true) = items[i].kind {
+                items[i].kind = .assistant(old + text, streaming: true)
+            } else {
+                append(.assistant(text, streaming: true), key: key)
+            }
+
+        case .assistant(let message, let blocks):
+            for block in blocks {
+                switch block {
+                case .text(let text):
+                    // With deltas, each full block finalizes the oldest still-streaming block of that message.
+                    if streamed.contains(message) {
+                        if let i = items.firstIndex(where: {
+                            guard $0.key?.hasPrefix(message + "#") == true, case .assistant(_, true) = $0.kind else { return false }
+                            return true
+                        }) {
+                            items[i].kind = .assistant(text, streaming: false)
+                        }
+                    } else if !text.isEmpty {
+                        append(.assistant(text, streaming: false), key: message)
+                    }
+                case .toolUse(let use):
+                    guard !items.contains(where: { $0.key == use.id }) else { continue }
+                    toolUse(use)
+                }
+            }
+
+        case .toolResult(let id, let isError, let text):
+            for ref in AgentStream.refs(inToolResult: text) { refs[ref.id] = ref }
+            if let i = items.firstIndex(where: { $0.key == id }), case .tool(let label, _, _) = items[i].kind {
+                items[i].kind = .tool(label, running: false, failed: isError)
+            }
+
+        case .result(let session, let isError, let subtype, let text, _):
+            sawResult = true
+            if let session { sessionID = session }
+            if isError || subtype != "success" {
+                if text.isEmpty { silentError = subtype } else { append(.error(String(text.prefix(300)))) }
+            }
+
+        case .ignored:
+            break
+        }
+    }
+
+    private func toolUse(_ use: AgentEvent.ToolUse) {
+        let name = use.name.replacingOccurrences(of: "mcp__mailsift__", with: "")
+        let input = AgentStream.object(use.input)
+        if name == "propose_action" {
+            guard let action = (input["action"] as? String).flatMap(MailAction.init(rawValue:)) else { return }
+            var seen = Set<Int64>()
+            let ids = (input["ids"] as? [NSNumber] ?? []).map(\.int64Value).filter { seen.insert($0).inserted }
+            guard !ids.isEmpty else { return }
+            append(.proposal(AgentProposal(action: action, ids: ids, reason: input["reason"] as? String ?? "")), key: use.id)
+            lookUp(ids)
+            return
+        }
+        append(.tool(Self.activity(name, input, refs: refs), running: true, failed: false), key: use.id)
+    }
+
+    static func activity(_ tool: String, _ input: [String: Any], refs: [Int64: MailRef]) -> String {
+        switch tool {
+        case "search_mail": return "搜尋「\(input["query"] as? String ?? "")」"
+        case "list_recent":
+            let range = [(input["after"] as? String).map { "\($0) 起" }, (input["before"] as? String).map { "\($0) 前" }]
+                .compactMap { $0 }.joined(separator: "、")
+            return range.isEmpty ? "列出最近的信" : "列出最近的信（\(range)）"
+        case "read_mail":
+            let id = (input["id"] as? NSNumber)?.int64Value ?? 0
+            return "讀取 " + (refs[id].map { $0.subject.isEmpty ? $0.sender : $0.subject } ?? "#\(id)")
+        case "list_senders": return "統計寄件者"
+        case "index_status": return "查看索引狀態"
+        default: return tool
+        }
+    }
+
+    /// Fills in sender/subject for ids the agent named but no tool result or context described.
+    private func lookUp(_ ids: [Int64]) {
+        let missing = Array(ids.filter { refs[$0] == nil }.prefix(200))
+        guard !missing.isEmpty, let lib = app.library else { return }
+        Task {
+            let found = await Task.detached {
+                missing.compactMap { id in
+                    (try? lib.message(id: id)).map { MailRef(id: id, sender: Fmt.sender($0.meta), subject: $0.meta.subject) }
+                }
+            }.value
+            for ref in found { refs[ref.id] = ref }
+        }
+    }
+
+    // MARK: - Proposals
+
+    func confirm(_ itemID: Int) {
+        guard let i = items.firstIndex(where: { $0.id == itemID }), case .proposal(var proposal) = items[i].kind,
+              proposal.state == .pending, let lib = app.library else { return }
+        proposal.state = .running
+        items[i].kind = .proposal(proposal)
+        Task {
+            do {
+                let report = try await lib.perform(proposal.action, ids: proposal.ids)
+                proposal.state = .done(succeeded: report.succeeded.count, failed: report.failed.count)
+                outcomes.append("User confirmed \(proposal.action.rawValue) on \(proposal.ids.count) messages: "
+                    + "\(report.succeeded.count) succeeded, \(report.failed.count) failed.")
+                refreshSearch(after: proposal.action, succeeded: report.succeeded)
+            } catch {
+                proposal.state = .failed(SearchModel.describe(error))
+                outcomes.append("User confirmed \(proposal.action.rawValue) on \(proposal.ids.count) messages; it failed: \(error.localizedDescription)")
+            }
+            update(itemID) { $0 = proposal }
+        }
+    }
+
+    func dismiss(_ itemID: Int) {
+        update(itemID) { proposal in
+            guard proposal.state == .pending else { return }
+            proposal.state = .cancelled
+            outcomes.append("User declined \(proposal.action.rawValue) on \(proposal.ids.count) messages.")
+        }
+    }
+
+    private func update(_ itemID: Int, _ change: (inout AgentProposal) -> Void) {
+        guard let i = items.firstIndex(where: { $0.id == itemID }), case .proposal(var proposal) = items[i].kind else { return }
+        change(&proposal)
+        items[i].kind = .proposal(proposal)
+    }
+
+    private func refreshSearch(after action: MailAction, succeeded: [Int64]) {
+        app.refreshStatus()
+        search.loadRecent()
+        if !search.query.isEmpty { search.submit(search.query) }
+        if [.trash, .archive].contains(action), let selected = search.selection, succeeded.contains(selected) {
+            search.selection = nil
+        }
+    }
+
+    // MARK: - Context
+
+    /// Role, conventions, and what the user is looking at. Rebuilt every turn.
+    private func systemPrompt(now: Date = .now) -> String {
+        let tz = TimeZone.current
+        let offset = tz.secondsFromGMT(for: now) / 60
+        let weekday = DateFormatter()
+        weekday.locale = Locale(identifier: "en_US_POSIX")
+        weekday.dateFormat = "EEEE"
+        let zone = String(format: "%@ (UTC%@%02d:%02d)", tz.identifier, offset < 0 ? "-" : "+", abs(offset) / 60, abs(offset) % 60)
+        var lines = [
+            "You are the mail assistant inside MailSift, a macOS app that searches the user's Apple Mail.",
+            "Answer in the user's language; default to Traditional Chinese (Taiwan). Be concise.",
+            "Now: \(Fmt.date.string(from: now)) \(weekday.string(from: now)), \(zone).",
+            "",
+            "Tools:",
+            "- list_recent for time-based questions (today, this week, unread, to-dos); search_mail for topics.",
+            "- read_mail before summarizing or quoting a specific message.",
+            "- To change mail (trash, archive, markRead, markUnread, flag, unflag) call propose_action with the ids and a short reason. The user confirms in the app. Never say mail was changed; say it is proposed.",
+            "- Refer to a message by writing [[id]], e.g. [[12345]]. The app renders it as a link showing sender and subject, so don't repeat them.",
+        ]
+        if !outcomes.isEmpty { lines += ["", "Since your last reply:"] + outcomes.map { "- " + $0 } }
+
+        lines += ["", "CONTEXT (what the user is looking at now)"]
+        let visible = search.query.isEmpty ? search.recent : search.hits
+        lines.append(search.query.isEmpty ? "List: newest mail" : "Search query: \(search.query)")
+        for hit in visible.prefix(30) {
+            let m = hit.meta
+            refs[m.id] = MailRef(id: m.id, sender: Fmt.sender(m), subject: m.subject)
+            lines.append("\(m.id) | \(Fmt.date.string(from: m.date)) | \(Fmt.sender(m)) | \(m.subject)\(m.isRead ? "" : " | unread")")
+        }
+        if visible.isEmpty { lines.append("(empty)") }
+        if let m = search.message {
+            refs[m.meta.id] = MailRef(id: m.meta.id, sender: Fmt.sender(m.meta), subject: m.meta.subject)
+            lines += ["", "Open message:", "id: \(m.meta.id)",
+                      "from: \(m.meta.senderName) <\(m.meta.senderAddress)>",
+                      "date: \(Fmt.date.string(from: m.meta.date))",
+                      "subject: \(m.meta.subject)",
+                      "body:", String(m.bodyText.prefix(1500))]
+        } else {
+            lines += ["", "Open message: none"]
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func append(_ kind: AgentItem.Kind, key: String? = nil) {
+        items.append(AgentItem(id: nextItem, key: key, kind: kind))
+        nextItem += 1
+    }
+}
+
+private final class StderrBox: @unchecked Sendable {
+    var data = Data()
+}

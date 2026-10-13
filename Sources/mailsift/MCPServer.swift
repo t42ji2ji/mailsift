@@ -3,7 +3,8 @@ import MailCore
 
 /// Minimal MCP server (JSON-RPC 2.0, newline-delimited, stdio) exposing the library as tools.
 /// Changing mail is two steps on purpose: `preview_action` returns the exact ids and count to show the user,
-/// and `perform_action` acts only on ids passed explicitly.
+/// and `perform_action` acts only on ids passed explicitly. The in-app agent gets `propose_action` instead, which
+/// changes nothing: the app shows the proposal and performs it after the user confirms.
 final class MCPServer {
     let library: MailLibrary
     let modelReady: Task<Void, Never>
@@ -17,6 +18,9 @@ final class MCPServer {
              ["query": str("What to look for, in any language"), "limit": int("Max results (default 20)"),
               "account": str("Only this account email"), "sender": str("Sender address or name contains"),
               "after": str("YYYY-MM-DD"), "before": str("YYYY-MM-DD")], required: ["query"]),
+        tool("list_recent", "Newest messages first, for time-based questions (today, this week, unread). Covers the newest \(recentWindow) indexed messages.",
+             ["limit": int("Max results (default 50)"), "after": str("YYYY-MM-DD, inclusive (local time)"),
+              "before": str("YYYY-MM-DD, exclusive (local time)"), "account": str("Only this account email")], required: []),
         tool("read_mail", "Read one message in full (headers and plain-text body).",
              ["id": int("Message id from search_mail")], required: ["id"]),
         tool("list_senders", "Senders ranked by message count, for cleanup.",
@@ -29,8 +33,14 @@ final class MCPServer {
         tool("perform_action", "Apply an action to exactly these ids. Trash moves to the mailbox's Trash (recoverable for 30 days in Gmail). Only call after the user confirmed the preview.",
              ["action": str("trash | archive | markRead | markUnread | flag | unflag"),
               "ids": ["type": "array", "items": ["type": "integer"], "description": "Message ids"]], required: ["action", "ids"]),
+        tool("propose_action", "Propose an action for the user to confirm in the app. Does not change mail.",
+             ["action": str("trash | archive | markRead | markUnread | flag | unflag"),
+              "ids": ["type": "array", "items": ["type": "integer"], "description": "Message ids"],
+              "reason": str("One short sentence: why these messages")], required: ["action", "ids", "reason"]),
         tool("index_status", "How much mail is indexed (keyword and semantic).", [:], required: []),
     ]
+
+    static let recentWindow = 2000
 
     static func tool(_ name: String, _ description: String, _ props: [String: Any], required: [String]) -> [String: Any] {
         ["name": name, "description": description,
@@ -80,6 +90,19 @@ final class MCPServer {
                                       after: (a["after"] as? String).flatMap(f.date), before: (a["before"] as? String).flatMap(f.date))
             let hits = try await library.search(a["query"] as? String ?? "", filter: filter, limit: a["limit"] as? Int ?? 20)
             return encode(hits)
+        case "list_recent":
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd"
+            let after = (a["after"] as? String).flatMap(f.date), before = (a["before"] as? String).flatMap(f.date)
+            let account = a["account"] as? String
+            let rows = library.recent(limit: Self.recentWindow).filter { hit in
+                let m = hit.meta
+                return after.map { m.date >= $0 } ?? true && before.map { m.date < $0 } ?? true
+                    && account.map { m.mailbox.account.caseInsensitiveCompare($0) == .orderedSame } ?? true
+            }
+            .prefix(a["limit"] as? Int ?? 50)
+            .map(RecentRow.init)
+            return encode(Array(rows))
         case "read_mail":
             var m = try library.message(id: Int64(a["id"] as? Int ?? -1))
             m.html = nil
@@ -98,6 +121,10 @@ final class MCPServer {
             let ids = (a["ids"] as? [Int] ?? []).map(Int64.init)
             guard !ids.isEmpty else { throw MailSourceError.other("ids is empty") }
             return encode(try await library.perform(try parseAction(a["action"]), ids: ids))
+        case "propose_action":
+            _ = try parseAction(a["action"])
+            guard !(a["ids"] as? [Int] ?? []).isEmpty else { throw MailSourceError.other("ids is empty") }
+            return "Proposal shown to the user; they will confirm in the app."
         case "index_status":
             return encode(library.status())
         default:
@@ -111,6 +138,27 @@ final class MCPServer {
         let ids: [Int64]
     }
 
+    struct RecentRow: Encodable {
+        let id: Int64
+        let date: Date
+        let sender: String
+        let subject: String
+        let snippet: String
+        let isRead: Bool
+        let isFlagged: Bool
+
+        init(_ hit: SearchHit) {
+            let m = hit.meta
+            id = m.id
+            date = m.date
+            sender = m.senderName.isEmpty ? m.senderAddress : "\(m.senderName) <\(m.senderAddress)>"
+            subject = m.subject
+            snippet = hit.snippet
+            isRead = m.isRead
+            isFlagged = m.isFlagged
+        }
+    }
+
     func parseAction(_ v: Any?) throws -> MailAction {
         guard let s = v as? String, let a = MailAction(rawValue: s) else {
             throw MailSourceError.other("action must be one of \(MailAction.allCases.map(\.rawValue).joined(separator: ", "))")
@@ -121,7 +169,13 @@ final class MCPServer {
     func encode<T: Encodable>(_ value: T) -> String {
         let e = JSONEncoder()
         e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        e.dateEncodingStrategy = .iso8601
+        // Local offset rather than UTC, so "today" in the user's time zone reads correctly.
+        let dates = ISO8601DateFormatter()
+        dates.timeZone = .current
+        e.dateEncodingStrategy = .custom { date, encoder in
+            var c = encoder.singleValueContainer()
+            try c.encode(dates.string(from: date))
+        }
         return String(data: (try? e.encode(value)) ?? Data(), encoding: .utf8) ?? ""
     }
 

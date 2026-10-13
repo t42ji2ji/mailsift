@@ -6,6 +6,7 @@ struct MessageDetailView: View {
     @State private var plainText = false
     @State private var remoteImages = false
     @State private var confirmTrash = false
+    @State private var showDetails = false
 
     var body: some View {
         Group {
@@ -52,6 +53,7 @@ struct MessageDetailView: View {
         .onChange(of: model.message?.meta.id) {
             plainText = false
             remoteImages = false
+            showDetails = false
         }
         .confirmationDialog("將這封郵件移到垃圾桶？", isPresented: $confirmTrash) {
             Button("移到垃圾桶", role: .destructive) { model.perform(.trash) }
@@ -64,28 +66,39 @@ struct MessageDetailView: View {
                 .font(.system(size: 22, weight: .semibold))
                 .tracking(-0.3)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .top, spacing: 12) {
+                .textSelection(.enabled)
+            HStack(alignment: showDetails ? .top : .center, spacing: 12) {
                 Monogram(name: Fmt.sender(m.meta))
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(Fmt.sender(m.meta)).font(.system(size: 13, weight: .semibold))
-                        if !m.meta.senderName.isEmpty {
-                            Text(m.meta.senderAddress).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Button { showDetails.toggle() } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(Fmt.sender(m.meta)).font(.system(size: 13, weight: .semibold))
+                            Image(systemName: showDetails ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(Theme.muted)
+                            Spacer(minLength: 12)
+                            Text(showDetails ? Fmt.date.string(from: m.meta.date) : Fmt.short(m.meta.date))
+                                .font(.system(size: 12).monospacedDigit())
+                                .foregroundStyle(Theme.muted)
                         }
+                        .contentShape(Rectangle())
                     }
-                    Text("給 " + (m.to.isEmpty ? "—" : m.to.joined(separator: ", ")) + (m.cc.isEmpty ? "" : "　副本 " + m.cc.joined(separator: ", ")))
+                    .buttonStyle(.plain)
+                    .help(showDetails ? "收合寄件資訊" : "顯示寄件資訊")
+                    if showDetails {
+                        VStack(alignment: .leading, spacing: 3) {
+                            if !m.meta.senderName.isEmpty { Text(m.meta.senderAddress) }
+                            Text("給 " + (m.to.isEmpty ? "—" : m.to.joined(separator: ", ")))
+                            if !m.cc.isEmpty { Text("副本 " + m.cc.joined(separator: ", ")) }
+                            Text(m.meta.mailbox.account)
+                        }
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.muted)
-                        .lineLimit(2)
-                }
-                Spacer(minLength: 12)
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(Fmt.date.string(from: m.meta.date)).font(.system(size: 12).monospacedDigit())
-                    Text(m.meta.mailbox.account).font(.system(size: 11)).foregroundStyle(Theme.muted)
+                        .textSelection(.enabled)
+                    }
                 }
             }
         }
-        .textSelection(.enabled)
         .padding(.top, 6)
     }
 
