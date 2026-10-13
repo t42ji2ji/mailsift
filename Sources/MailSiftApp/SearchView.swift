@@ -77,11 +77,14 @@ struct SearchView: View {
             ZStack {
                 HitList(model: model, sections: inboxSections, showMatch: false, active: model.box == .inbox)
                 if model.box != .inbox {
-                    HitList(model: model, sections: DateSection.group(model.recent), showMatch: false)
-                        .background(Theme.paper)
-                        .id(model.box)
-                        .transition(.move(edge: .trailing))
-                        .zIndex(1)
+                    VStack(spacing: 0) {
+                        backRow
+                        HitList(model: model, sections: DateSection.group(model.recent), showMatch: false)
+                    }
+                    .background(Theme.paper)
+                    .id(model.box)
+                    .transition(.move(edge: .trailing))
+                    .zIndex(1)
                 }
             }
         } else if model.hits.isEmpty, !model.searching {
@@ -89,6 +92,21 @@ struct SearchView: View {
         } else {
             HitList(model: model, sections: [DateSection(title: "\(model.hits.count) 封結果", hits: model.hits)], showMatch: true)
         }
+    }
+
+    private var backRow: some View {
+        Button { model.box = .inbox } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
+                Text(model.box == .flagged ? "旗標" : "封存").font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 34)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("回到 Inbox（Esc）")
     }
 
     /// Flagged mail pinned on top, showing its first rows, then the rest of the inbox by date.
