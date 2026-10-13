@@ -4,6 +4,8 @@ import SwiftUI
 struct SearchView: View {
     let app: AppModel
     @Bindable var model: SearchModel
+    @State private var hasText = false
+    @State private var clearToken = 0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -25,9 +27,17 @@ struct SearchView: View {
     private var searchBar: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.muted)
-            IMESearchField(prompt: "用一句話描述你要找的信") { model.submit($0) }
+            IMESearchField(prompt: "用一句話描述你要找的信", clearToken: clearToken, onEdit: { hasText = $0 }) { model.submit($0) }
                 .frame(height: 22)
             if model.searching { ProgressView().controlSize(.mini) }
+            if hasText {
+                Button { clearToken += 1 } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(Theme.faint)
+                }
+                .buttonStyle(.plain)
+                .help("清除")
+                .keyboardShortcut(.escape, modifiers: [])
+            }
         }
         .padding(.horizontal, 12)
         .frame(height: 40)

@@ -5,6 +5,9 @@ import SwiftUI
 /// a 250 ms debounce after the last committed change, or immediately on Enter.
 struct IMESearchField: NSViewRepresentable {
     var prompt: String
+    /// Changing this value clears the field (and commits the empty string).
+    var clearToken = 0
+    var onEdit: (Bool) -> Void = { _ in }
     var onCommit: (String) -> Void
 
     func makeNSView(context: Context) -> NSTextField {
@@ -24,16 +27,33 @@ struct IMESearchField: NSViewRepresentable {
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.onCommit = onCommit
+        context.coordinator.onEdit = onEdit
         field.placeholderString = prompt
+        if context.coordinator.clearToken != clearToken {
+            context.coordinator.clearToken = clearToken
+            field.stringValue = ""
+            let (onEdit, onCommit) = (onEdit, onCommit)
+            DispatchQueue.main.async {  // not during the SwiftUI update pass
+                onEdit(false)
+                onCommit("")
+                field.window?.makeFirstResponder(field)
+            }
+        }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onCommit: onCommit) }
+    func makeCoordinator() -> Coordinator {
+        let c = Coordinator(onCommit: onCommit)
+        c.clearToken = clearToken
+        return c
+    }
 
     @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         static let debounce: Duration = .milliseconds(250)
 
         var onCommit: (String) -> Void
+        var onEdit: (Bool) -> Void = { _ in }
+        var clearToken = 0
         private var pending: Task<Void, Never>?
 
         init(onCommit: @escaping (String) -> Void) { self.onCommit = onCommit }
@@ -44,6 +64,7 @@ struct IMESearchField: NSViewRepresentable {
 
         func controlTextDidChange(_ note: Notification) {
             guard let field = note.object as? NSTextField else { return }
+            onEdit(!field.stringValue.isEmpty)
             pending?.cancel()
             guard !isComposing(field) else { return }
             let text = field.stringValue

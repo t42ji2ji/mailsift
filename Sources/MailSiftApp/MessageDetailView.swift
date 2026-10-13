@@ -3,7 +3,8 @@ import SwiftUI
 
 struct MessageDetailView: View {
     @Bindable var model: SearchModel
-    @State private var showHTML = false
+    @State private var plainText = false
+    @State private var remoteImages = false
     @State private var confirmTrash = false
 
     var body: some View {
@@ -12,16 +13,18 @@ struct MessageDetailView: View {
                 VStack(spacing: 0) {
                     actionBar(m.meta, hasHTML: m.html != nil)
                     if let error = model.actionError { ErrorStrip(text: error) }
-                    if showHTML, let html = m.html {
+                    if !plainText, let html = m.html {
                         header(m).padding(.horizontal, 36).padding(.bottom, 18)
                         Rectangle().fill(Theme.hairline).frame(height: 1)
-                        HTMLBodyView(html: html)
+                        HTMLBodyView(html: html, allowRemote: remoteImages)
+                            .padding(.top, 18)
+                            .background(Color(white: 0.965))  // mail HTML assumes a light page, also in dark mode
                     } else {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 26) {
                                 header(m)
                                 Rectangle().fill(Theme.hairline).frame(height: 1)
-                                Text(m.bodyText.isEmpty ? "（沒有文字內容）" : m.bodyText)
+                                Text(m.bodyText.isEmpty ? AttributedString("（沒有文字內容）") : Linkify.attributed(m.bodyText))
                                     .font(.system(size: 14))
                                     .lineSpacing(5)
                                     .foregroundStyle(m.bodyText.isEmpty ? Theme.muted : Theme.ink)
@@ -45,6 +48,10 @@ struct MessageDetailView: View {
                     .foregroundStyle(Theme.faint)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .onChange(of: model.message?.meta.id) {
+            plainText = false
+            remoteImages = false
         }
         .confirmationDialog("將這封郵件移到垃圾桶？", isPresented: $confirmTrash) {
             Button("移到垃圾桶", role: .destructive) { model.perform(.trash) }
@@ -87,7 +94,12 @@ struct MessageDetailView: View {
             Spacer()
             if model.actionRunning { ProgressView().controlSize(.mini).padding(.trailing, 6) }
             if hasHTML {
-                IconButton(symbol: "doc.richtext", help: showHTML ? "顯示純文字" : "顯示 HTML", active: showHTML) { showHTML.toggle() }
+                if !plainText {
+                    IconButton(symbol: remoteImages ? "photo.fill" : "photo", help: remoteImages ? "封鎖遠端圖片" : "載入遠端圖片", active: remoteImages) {
+                        remoteImages.toggle()
+                    }
+                }
+                IconButton(symbol: "text.alignleft", help: plainText ? "顯示原始版面" : "顯示純文字", active: plainText) { plainText.toggle() }
                 Rectangle().fill(Theme.hairline).frame(width: 1, height: 16).padding(.horizontal, 4)
             }
             IconButton(symbol: "archivebox", help: "封存") { model.perform(.archive) }
