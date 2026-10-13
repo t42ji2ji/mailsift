@@ -3,11 +3,20 @@ import Foundation
 /// Turns a parsed MIME tree into readable text.
 enum MailText {
     /// Picks the body: first non-empty text/plain leaf, else the first text/html leaf converted to text.
-    /// Returns (bodyText, html). Attachments and nested messages are skipped.
+    /// Attached messages (message/rfc822, i.e. forwarded as attachment) follow, each as its subject and body.
+    /// Returns (bodyText, html). Other attachments are skipped.
     static func body(of root: MIMEPart) -> (text: String, html: String?) {
         var plain: String? = nil
         var html: String? = nil
-        for leaf in root.leaves() where !leaf.isAttachment {
+        var attached: [String] = []
+        for leaf in root.leaves() {
+            if leaf.isMessage, let inner = leaf.children.first {
+                let subject = normalize(MIME.decodeHeader(inner.header("subject") ?? ""))
+                let text = [subject, body(of: inner).text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                if !text.isEmpty { attached.append(text) }
+                continue
+            }
+            if leaf.isAttachment { continue }
             switch leaf.mimeType {
             case "text/plain" where plain == nil:
                 let t = leaf.text
@@ -18,7 +27,8 @@ enum MailText {
             }
         }
         let raw = plain ?? html.map(htmlToText) ?? ""
-        return (normalize(stripQuotes(raw)), html)
+        let main = normalize(stripQuotes(raw))
+        return (([main] + attached).filter { !$0.isEmpty }.joined(separator: "\n\n"), html)
     }
 
     // MARK: HTML
@@ -89,23 +99,27 @@ enum MailText {
         re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
     }
 
-    /// Drops ">"-quoted lines and everything from a reply header ("On … wrote:", "…寫道：", "Original Message").
-    /// Forwarded-message markers cut too, unless nothing would be left (a bare forward keeps its content).
+    /// Drops ">"-quoted lines and everything from a reply header ("On … wrote:", "…寫道：", "Original Message",
+    /// an Outlook "From:/Sent:/To:" block). Forwarded content is kept: the header block right after a forward marker,
+    /// and Outlook blocks whose subject is "FW:/Fwd:", don't cut.
     static func stripQuotes(_ text: String) -> String {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         var kept: [Substring] = []
+        var inForwardHeader = false
         var i = 0
         while i < lines.count {
             let line = lines[i]
             let t = line.trimmingCharacters(in: .whitespaces)
             if t.hasPrefix(">") || t.hasPrefix("＞") { i += 1; continue }
-            if isReplyHeader(t, next: i + 1 < lines.count ? lines[i + 1].trimmingCharacters(in: .whitespaces) : "")
-                || (t.hasPrefix("-") && matches(cutMarker, t)) || (isOutlookHeader(lines, at: i) && kept.contains { !$0.allSatisfy(\.isWhitespace) }) {
-                break
-            }
-            if t.count < 60, matches(forwardMarker, t) {
-                let before = kept.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-                if !before.isEmpty { break }
+            if t.count < 60, matches(forwardMarker, t) { inForwardHeader = true }
+            else if t.isEmpty { inForwardHeader = false }
+            else if !inForwardHeader {
+                let outlook = isOutlookHeader(lines, at: i) && !isForwardBlock(lines, at: i)
+                    && kept.contains { !$0.allSatisfy(\.isWhitespace) }
+                if outlook || (t.hasPrefix("-") && matches(cutMarker, t))
+                    || isReplyHeader(t, next: i + 1 < lines.count ? lines[i + 1].trimmingCharacters(in: .whitespaces) : "") {
+                    break
+                }
             }
             kept.append(line)
             i += 1
@@ -113,6 +127,14 @@ enum MailText {
         let out = kept.joined(separator: "\n")
         // Bottom-posted replies start with the reply header; keep everything rather than return nothing.
         return out.allSatisfy(\.isWhitespace) ? text : out
+    }
+
+    private static let forwardSubject = try! NSRegularExpression(
+        pattern: "^(subject|主旨|主题)[:：]\\s*(fw|fwd|轉寄|转发)\\s*[:：]", options: [.caseInsensitive])
+
+    /// An Outlook header block whose Subject line starts with FW:/Fwd: introduces a forward, not a quoted reply.
+    private static func isForwardBlock(_ lines: [Substring], at i: Int) -> Bool {
+        (i + 1..<min(i + 6, lines.count)).contains { matches(forwardSubject, lines[$0].trimmingCharacters(in: .whitespaces)) }
     }
 
     private static let headerFrom = ["From:", "寄件者:", "寄件者：", "发件人:", "发件人：", "寄件人:", "寄件人："]

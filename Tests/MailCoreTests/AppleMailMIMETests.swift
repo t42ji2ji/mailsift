@@ -131,6 +131,26 @@ final class AppleMailMIMETests: XCTestCase {
         XCTAssertEqual(Charsets.decode(Array("中文".utf8) + [0xFF] + Array("字".utf8), charset: "utf-8"), "中文\u{FFFD}字")
     }
 
+    func testForwardedAsAttachment() {
+        let inner = "Subject: =?UTF-8?B?5Lit5paH?=\nContent-Type: text/plain; charset=utf-8\n\nInner body\n> quoted"
+        let raw = """
+        Content-Type: multipart/mixed; boundary=b
+
+        --b
+        Content-Type: text/plain
+
+        See attached.
+        --b
+        Content-Type: message/rfc822
+        Content-Disposition: attachment; filename="fwd.eml"
+        Content-Transfer-Encoding: base64
+
+        \(Data(inner.utf8).base64EncodedString())
+        --b--
+        """
+        XCTAssertEqual(MailText.body(of: message(raw)).text, "See attached.\n\n中文\n\nInner body")
+    }
+
     func testBase64LabelOnRawText() {
         let raw = "Content-Type: text/plain; charset=utf-8\nContent-Transfer-Encoding: base64\n\n親愛的會員您好"
         XCTAssertEqual(MailText.body(of: message(raw)).text, "親愛的會員您好")
@@ -149,10 +169,12 @@ final class AppleMailMIMETests: XCTestCase {
         XCTAssertEqual(MailText.stripQuotes("see below\nFrom: A <a@x.com>\nSent: Tuesday\nTo: B\nSubject: RE: x\n\nold"), "see below")
         // A notification with From/Date but no To/Subject is content, not a quote header.
         XCTAssertEqual(MailText.stripQuotes("Hi\nFrom: Simon\nDate: 2023/11/20\nView message"), "Hi\nFrom: Simon\nDate: 2023/11/20\nView message")
-        // Forward with a note cuts; a bare forward keeps the forwarded content.
-        XCTAssertEqual(MailText.stripQuotes("FYI\n---------- Forwarded message ---------\nFrom: x\nbody"), "FYI")
-        XCTAssertEqual(MailText.stripQuotes("---------- Forwarded message ---------\nFrom: x\nbody"),
-                       "---------- Forwarded message ---------\nFrom: x\nbody")
+        // Forwarded content is kept, including the forwarded header block; a reply quote inside it still cuts.
+        XCTAssertEqual(MailText.stripQuotes("FYI\n---------- Forwarded message ---------\nFrom: A <a@x.com>\nDate: Mon\nSubject: Hi\nTo: B\n\nbody\nOn Sun, A wrote:\nolder"),
+                       "FYI\n---------- Forwarded message ---------\nFrom: A <a@x.com>\nDate: Mon\nSubject: Hi\nTo: B\n\nbody")
+        XCTAssertEqual(MailText.stripQuotes("see\nBegin forwarded message:\n\nbody"), "see\nBegin forwarded message:\n\nbody")
+        XCTAssertEqual(MailText.stripQuotes("FYI\nFrom: A\nSent: Mon\nTo: B\nSubject: FW: report\n\nbody"),
+                       "FYI\nFrom: A\nSent: Mon\nTo: B\nSubject: FW: report\n\nbody")
         // Bottom-posted reply: header first, nothing above it → keep everything.
         XCTAssertEqual(MailText.stripQuotes("Bob <b@x.com> 於 2015/1/1 寫道：\nquoted\n\nmy answer"),
                        "Bob <b@x.com> 於 2015/1/1 寫道：\nquoted\n\nmy answer")

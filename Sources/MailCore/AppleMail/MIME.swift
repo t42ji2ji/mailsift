@@ -38,14 +38,20 @@ struct MIMEPart {
     }
 
     /// Depth-first leaves.
-    func leaves() -> [MIMEPart] { children.isEmpty ? [self] : children.flatMap { $0.leaves() } }
+    /// An attached message (message/rfc822); its parsed form is `children[0]`.
+    var isMessage: Bool { mimeType == "message/rfc822" }
+
+    /// Depth-first leaves. Attached messages count as leaves; their content is not mixed into this message's.
+    func leaves() -> [MIMEPart] { children.isEmpty || isMessage ? [self] : children.flatMap { $0.leaves() } }
 }
 
 enum MIME {
     // MARK: Entity parsing
 
     /// Parses an RFC 822 message. Line endings are normalized to LF first.
-    static func parse(_ raw: some Collection<UInt8>) -> MIMEPart {
+    static func parse(_ raw: some Collection<UInt8>) -> MIMEPart { parse(raw, depth: 0) }
+
+    private static func parse(_ raw: some Collection<UInt8>, depth: Int) -> MIMEPart {
         var bytes = [UInt8]()
         bytes.reserveCapacity(raw.count)
         var prevCR = false
@@ -55,7 +61,7 @@ enum MIME {
             if !prevCR { bytes.append(b) }
         }
         if prevCR { bytes.append(0x0A) }
-        var root = parseEntity(bytes[...], depth: 0)
+        var root = parseEntity(bytes[...], depth: depth)
         // Raw 8-bit headers that aren't UTF-8 are usually in the body's charset.
         if root.rawHeaders.contains(where: { $0 >= 0x80 }), String(bytes: root.rawHeaders, encoding: .utf8) == nil,
            let cs = root.leaves().lazy.compactMap({ $0.contentType.params["charset"] }).first {
@@ -86,6 +92,8 @@ enum MIME {
         let ct = part.contentType
         if ct.type.hasPrefix("multipart/"), let boundary = ct.params["boundary"], !boundary.isEmpty, depth < 20 {
             part.children = splitMultipart(part.body, boundary: boundary).map { parseEntity($0, depth: depth + 1) }
+        } else if part.isMessage, depth < 20 {
+            part.children = [parse(part.decodedBody, depth: depth + 1)]
         }
         return part
     }
