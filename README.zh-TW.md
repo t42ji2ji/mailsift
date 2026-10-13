@@ -4,6 +4,8 @@
 
 # MailSift
 
+**開源 · 本地 · 語意搜尋**
+
 在 Mac 上用意思搜尋你所有的 Apple Mail。
 
 [**下載**](https://github.com/t42ji2ji/mailsift/releases/latest) · [官網](https://mailsift.dorara.app) · [English](README.md)

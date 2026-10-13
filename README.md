@@ -4,6 +4,8 @@
 
 # MailSift
 
+**Open source · Local · Semantic search**
+
 Search all your Apple Mail by meaning, on your Mac.
 
 [**Download**](https://github.com/t42ji2ji/mailsift/releases/latest) · [Website](https://mailsift.dorara.app) · [中文](README.zh-TW.md)
