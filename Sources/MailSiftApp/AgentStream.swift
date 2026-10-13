@@ -1,7 +1,7 @@
 import Foundation
 
 /// The CLI that runs the assistant.
-enum AgentBackend: String, CaseIterable, Sendable {
+enum AgentBackend: String, CaseIterable, Codable, Sendable {
     case claude, codex
 
     var title: String {
@@ -171,7 +171,7 @@ enum AgentStream {
 }
 
 /// Sender and subject for rendering `[[id]]` references.
-struct MailRef: Equatable, Sendable {
+struct MailRef: Equatable, Codable, Sendable {
     var id: Int64
     var sender: String
     var subject: String

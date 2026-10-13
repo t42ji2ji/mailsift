@@ -99,7 +99,6 @@ struct AgentPanel: View {
 
     private var header: some View {
         HStack(spacing: 4) {
-            Text("助理").font(.system(size: 15, weight: .semibold))
             Spacer()
             BackendPicker(model: model).padding(.trailing, 6)
             IconButton(symbol: "square.and.pencil", help: "新對話") { model.newConversation() }

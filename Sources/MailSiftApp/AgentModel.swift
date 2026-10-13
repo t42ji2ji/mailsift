@@ -3,8 +3,8 @@ import MailCore
 import Observation
 
 /// A proposed mail change, shown as a card until the user confirms or dismisses it.
-struct AgentProposal {
-    enum State: Equatable {
+struct AgentProposal: Codable {
+    enum State: Equatable, Codable {
         case pending, running, cancelled
         case done(succeeded: Int, failed: Int)
         case failed(String)
@@ -17,8 +17,8 @@ struct AgentProposal {
 }
 
 /// A reply drafted by the agent, editable in the card and opened as a Mail compose window (never sent here).
-struct AgentDraft {
-    enum State: Equatable {
+struct AgentDraft: Codable {
+    enum State: Equatable, Codable {
         case pending, opening, opened, cancelled
         case failed(String)
     }
@@ -37,8 +37,8 @@ struct AgentMailState {
     var error: String?
 }
 
-struct AgentItem: Identifiable {
-    enum Kind {
+struct AgentItem: Identifiable, Codable {
+    enum Kind: Codable {
         case user(String)
         case assistant(String, streaming: Bool)
         case tool(String, running: Bool, failed: Bool)
@@ -93,6 +93,49 @@ final class AgentModel {
         self.app = app
         self.search = search
         backend = UserDefaults.standard.string(forKey: Self.backendKey).flatMap(AgentBackend.init(rawValue:)) ?? .claude
+        restore()
+    }
+
+    // MARK: - Saved conversation
+
+    /// The current conversation, so it survives quitting the app.
+    private struct Saved: Codable {
+        var backend: AgentBackend
+        var sessionID: String?
+        var items: [AgentItem]
+        var refs: [Int64: MailRef]
+    }
+
+    static let savedURL = workDir.appendingPathComponent("conversation.json")
+
+    private func restore() {
+        guard let data = try? Data(contentsOf: Self.savedURL),
+              let saved = try? JSONDecoder().decode(Saved.self, from: data), saved.backend == backend else { return }
+        sessionID = saved.sessionID
+        refs = saved.refs
+        // A quit mid-action leaves nothing running.
+        items = saved.items.map { item in
+            var item = item
+            switch item.kind {
+            case .proposal(var p) where p.state == .running: p.state = .pending; item.kind = .proposal(p)
+            case .draft(var d) where d.state == .opening: d.state = .pending; item.kind = .draft(d)
+            default: break
+            }
+            return item
+        }
+        nextItem = (items.map(\.id).max() ?? -1) + 1
+        finishTurn()
+    }
+
+    private func save() {
+        guard !items.isEmpty else {
+            try? FileManager.default.removeItem(at: Self.savedURL)
+            return
+        }
+        let saved = Saved(backend: backend, sessionID: sessionID, items: items, refs: refs)
+        guard let data = try? JSONEncoder().encode(saved) else { return }
+        try? FileManager.default.createDirectory(at: Self.workDir, withIntermediateDirectories: true)
+        try? data.write(to: Self.savedURL, options: .atomic)
     }
 
     /// Switching starts a new conversation: sessions do not carry over between CLIs.
@@ -118,6 +161,7 @@ final class AgentModel {
         sessionID = nil
         streamed = []
         outcomes = []
+        save()
     }
 
     func cancel() {
@@ -318,6 +362,7 @@ final class AgentModel {
 
     private func finishTurn() {
         running = false
+        defer { save() }
         for i in items.indices {
             switch items[i].kind {
             case .assistant(let text, true): items[i].kind = .assistant(text, streaming: false)
@@ -475,6 +520,7 @@ final class AgentModel {
         guard let i = items.firstIndex(where: { $0.id == itemID }), case .proposal(var proposal) = items[i].kind else { return }
         change(&proposal)
         items[i].kind = .proposal(proposal)
+        save()
     }
 
     /// Mirrors a successful action on the transcript's mail rows.
@@ -547,6 +593,7 @@ final class AgentModel {
         guard let i = items.firstIndex(where: { $0.id == itemID }), case .draft(var draft) = items[i].kind else { return }
         change(&draft)
         items[i].kind = .draft(draft)
+        save()
     }
 
     private func refreshSearch(after action: MailAction, succeeded: [Int64]) {
