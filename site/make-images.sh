@@ -7,8 +7,7 @@ set -euo pipefail
 cd "${0:A:h}"
 
 BOLD="/System/Library/Fonts/Supplemental/Arial Bold.ttf"
-REG="/System/Library/Fonts/Supplemental/Arial.ttf"
-PAPER="#ececea"; INK="#161616"; MUTED="#6b6b6b"
+INK="#000000"
 
 if [[ "${1:-}" == "--placeholder" || ! -f assets/icon.png ]]; then
   magick -size 1024x1024 xc:none \
@@ -21,14 +20,14 @@ magick assets/icon.png -resize 32x32 favicon-32.png
 magick assets/icon.png -resize 192x192 favicon-192.png
 magick assets/icon.png -resize 180x180 apple-touch-icon.png
 
-# 1200×630: icon on the left, name and tagline on the right, paper background
-magick -size 1200x630 "xc:$PAPER" \
-  \( assets/icon.png -resize 300x300 \) -gravity west -geometry +96+0 -composite \
-  -gravity northwest \
-  -font "$BOLD" -pointsize 104 -fill "$INK" -annotate +440+200 "MailSift" \
-  -font "$REG" -pointsize 38 -fill "$MUTED" -annotate +446+340 "Search Apple Mail by meaning." \
-  -font "$REG" -pointsize 38 -fill "$MUTED" -annotate +446+392 "On your Mac. Free and open source." \
-  -fill "#D64A29" -draw "rectangle 446,470 506,476" \
+# 1200×630 in the app's look: canvas gray, ink wordmark, muted tagline, the icon on the right
+SF="/System/Library/Fonts/SFNS.ttf"
+magick -size 1200x630 "xc:#f6f6f6" \
+  -fill "#000000" -draw "roundrectangle 96,214 136,254 10,10" \
+  -font "$SF" -pointsize 92 -fill "#000000" -stroke "#000000" -strokewidth 3 -gravity northwest -annotate +160+196 "MailSift" \
+  -font "$SF" -stroke none -pointsize 40 -fill "#858585" -annotate +98+330 "Find any email by describing it." \
+  -font "$SF" -pointsize 26 -fill "#a3a3a3" -annotate +98+520 "macOS · free and open source" \
+  \( assets/icon.png -resize 280x280 \) -gravity east -geometry +110+0 -composite \
   og-image.png
 
 chmod 644 assets/icon.png favicon-32.png favicon-192.png apple-touch-icon.png og-image.png

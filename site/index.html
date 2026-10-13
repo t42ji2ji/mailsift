@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MailSift — search Apple Mail by meaning</title>
-<meta name="description" content="MailSift searches all of your Apple Mail by meaning and by keyword, on your Mac. Clean up by sender, and ask Claude Code or Codex about your mail. Free and open source for macOS.">
-<meta name="theme-color" content="#ececec" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#171717" media="(prefers-color-scheme: dark)">
+<title>MailSift — find any email by describing it</title>
+<meta name="description" content="Search all of Apple Mail by meaning, on your Mac. Free and open source for macOS.">
+<meta name="theme-color" content="#f6f6f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#252525" media="(prefers-color-scheme: dark)">
 <link rel="canonical" href="https://mailsift.dorara.app/">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
@@ -14,18 +14,13 @@
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="MailSift">
 <meta property="og:url" content="https://mailsift.dorara.app/">
-<meta property="og:title" content="MailSift — search Apple Mail by meaning">
-<meta property="og:description" content="Find mail by describing it. Search runs on your Mac with an on-device model. Free and open source for macOS.">
+<meta property="og:title" content="MailSift — find any email by describing it">
+<meta property="og:description" content="Search all of Apple Mail by meaning, on your Mac. Free and open source for macOS.">
 <meta property="og:image" content="https://mailsift.dorara.app/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="MailSift — search Apple Mail by meaning">
-<meta name="twitter:description" content="Find mail by describing it. Search runs on your Mac with an on-device model. Free and open source for macOS.">
 <meta name="twitter:image" content="https://mailsift.dorara.app/og-image.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script>
   (function () {
     var lang = null;
@@ -36,307 +31,131 @@
     document.documentElement.lang = lang === "zh" ? "zh-Hant-TW" : "en";
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 
-<header class="bar">
-  <a class="brand" href="#top" aria-label="MailSift">
-    <img src="assets/icon.png" width="28" height="28" alt="">
-    <span>MailSift</span>
-  </a>
-  <nav class="bar-actions">
-    <div class="lang" role="group" aria-label="Language / 語言">
-      <button type="button" data-set-lang="en">EN</button>
-      <button type="button" data-set-lang="zh">中文</button>
-    </div>
-    <a class="bar-link" href="https://github.com/t42ji2ji/mailsift">GitHub</a>
-  </nav>
+<header class="top">
+  <span class="wordmark"><i></i>MailSift</span>
+  <div class="lang" role="group" aria-label="Language / 語言">
+    <button type="button" data-set-lang="en">EN</button>
+    <button type="button" data-set-lang="zh">中文</button>
+  </div>
 </header>
 
-<main id="top">
-
-  <!-- Hero: the claim, and a search that proves it. All mail below is invented. -->
+<main>
   <section class="hero">
-    <div class="hero-copy">
-      <img class="hero-icon" src="assets/icon.png" width="84" height="84" alt="MailSift app icon">
-      <h1>
-        <span class="en">Find the email <em>you mean.</em></span>
-        <span class="zh">說出你要的信，<em>就找得到</em>。</span>
-      </h1>
-      <p class="lede">
-        <span class="en">Search all of Apple Mail by meaning, on your Mac.</span>
-        <span class="zh">用意思搜尋整個 Apple Mail，全在你的 Mac 上。</span>
-      </p>
-      <ul class="points">
-        <li><span class="marks" aria-hidden="true"><i class="m-sem"></i><i class="m-both"></i><i class="m-key"></i></span><span class="en">Meaning and keywords, in one search</span><span class="zh">語意和關鍵字一起搜</span></li>
-        <li><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 14.5h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="en">The model runs on your Mac</span><span class="zh">模型在你的 Mac 上跑</span></li>
-        <li><img src="assets/claude.svg" width="18" height="18" alt=""><img class="invert-dark" src="assets/codex.svg" width="18" height="18" alt=""><span class="en">Ask your mail with Claude Code or Codex</span><span class="zh">用 Claude Code 或 Codex 問你的信</span></li>
-        <li><svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.530 5.47 7.590.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.780-.2-3.64-.89-3.640-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><span class="en">Free and open source</span><span class="zh">免費、開源</span></li>
-      </ul>
-      <div class="cta">
-        <a class="btn btn-primary" href="https://github.com/t42ji2ji/mailsift/releases/latest">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 1.5v9m0 0L4.5 7M8 10.5 11.5 7M2.5 13.5h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span class="en">Download for Mac</span><span class="zh">下載 Mac 版</span>
-        </a>
-        <a class="btn btn-quiet" href="https://github.com/t42ji2ji/mailsift">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.530 5.47 7.590.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.780-.2-3.64-.89-3.640-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-          <span class="en">Source on GitHub</span><span class="zh">GitHub 原始碼</span>
-        </a>
-      </div>
-      <p class="fine">
-        <span class="ver">v0.1.0</span> ·
-        <span class="en">macOS 15 or later · Apple Silicon</span>
-        <span class="zh">macOS 15 以上 · Apple Silicon</span>
-      </p>
-    </div>
+    <img class="icon" src="assets/icon.png" width="72" height="72" alt="MailSift app icon">
+    <h1>MailSift</h1>
+    <p class="tagline"><span class="en">Find any email by describing it.</span><span class="zh">用一句話找到任何一封信。</span></p>
+    <a class="ink-btn big" href="https://github.com/t42ji2ji/mailsift/releases/latest"><span class="en">Download for Mac</span><span class="zh">下載 Mac 版</span></a>
+    <p class="fine"><span class="en">macOS 15+ · free and open source</span><span class="zh">macOS 15 以上 · 免費開源</span></p>
+  </section>
 
-    <!-- Mockup with invented mail. A real screenshot can replace it later:
-         <figure class="shot"><img src="assets/search.png" ... data-optional></figure> -->
-    <figure class="mock search" aria-label="Example search">
-      <div class="search-field">
-        <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m10.4 10.4 3.4 3.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-        <span class="query"><span class="en" data-query="the invoice from the Kyoto hotel">the invoice from the Kyoto hotel</span><span class="zh" data-query="京都飯店的發票">京都飯店的發票</span><i class="caret"></i></span>
+  <!-- The app window, recreated in HTML with invented mail (the app's UI is Chinese-only, so are its labels here).
+       A real screenshot could replace this figure later: <img src="assets/window.png" ...> -->
+  <figure class="window" aria-label="MailSift window with an example search">
+    <aside class="rail">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <span class="wordmark"><i></i>MailSift</span>
+      <ul>
+        <li class="on"><svg viewBox="0 0 16 16"><path d="M2 9.5 3.6 3h8.8L14 9.5V13H2zM2 9.5h3.5l.8 1.5h3.4l.8-1.5H14"/></svg>Inbox</li>
+        <li><svg viewBox="0 0 16 16"><path d="M3.5 14V2.5h8l-1.6 3 1.6 3h-8"/></svg>旗標</li>
+        <li><svg viewBox="0 0 16 16"><path d="M2 3h12v3H2zM3 6v7h10V6M6.5 8.5h3"/></svg>封存</li>
+        <li><svg viewBox="0 0 16 16"><path d="M2 3h12v3H2zM3 6v7h10V6M6.5 8l3 3m0-3-3 3"/></svg>垃圾郵件</li>
+        <li><svg viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></svg>垃圾桶</li>
+        <li class="gap"><svg viewBox="0 0 16 16"><circle cx="6" cy="5.5" r="2.3"/><path d="M1.8 13c.5-2.4 2.2-3.6 4.2-3.6s3.7 1.2 4.2 3.6M10.5 3.4a2.2 2.2 0 1 1 0 4.3M12 9.6c1.3.5 2 1.6 2.3 3.4"/></svg>寄件者</li>
+      </ul>
+    </aside>
+    <div class="list">
+      <div class="field">
+        <svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg>
+        <span class="query" data-query="京都飯店的發票">京都飯店的發票</span><i class="caret"></i>
       </div>
-      <p class="section-title"><span class="en">4 results</span><span class="zh">4 封結果</span></p>
-      <ol class="hits" data-hits>
-        <li class="hit selected">
-          <i class="unread" aria-hidden="true"></i>
-          <div>
-            <p class="hit-top"><b>Sumire-tei Kyoto</b><time>9/18</time></p>
-            <p class="hit-subject">ご宿泊の領収書（9月12日〜15日）</p>
-            <p class="hit-snip">この度はご宿泊いただき誠にありがとうございました。領収書を添付いたします。<i class="m-sem" title="Semantic"></i></p>
-          </div>
-        </li>
-        <li class="hit">
-          <i aria-hidden="true"></i>
-          <div>
-            <p class="hit-top"><b>Mika Tanaka</b><time>9/20</time></p>
-            <p class="hit-subject">Re: Kyoto trip expenses <svg class="flag" viewBox="0 0 12 12" width="10" height="10" aria-label="Flagged"><path d="M2.5 11V1.6h6.2l-1.4 2.3 1.4 2.3H3.6" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/></svg></p>
-            <p class="hit-snip">Could you forward the hotel invoice? Finance needs it for the claim.<i class="m-both" title="Semantic and keyword"></i></p>
-          </div>
-        </li>
-        <li class="hit">
-          <i aria-hidden="true"></i>
-          <div>
-            <p class="hit-top"><b>林佳慧</b><time>9/22</time></p>
-            <p class="hit-subject">京都出差住宿收據</p>
-            <p class="hit-snip">住宿那張收據我放在附件，金額是日圓，報帳時記得換算。<i class="m-sem" title="Semantic"></i></p>
-          </div>
-        </li>
-        <li class="hit">
-          <i aria-hidden="true"></i>
-          <div>
-            <p class="hit-top"><b>Northwind Travel</b><time>8/30</time></p>
-            <p class="hit-subject">Booking confirmed: Kyoto, 3 nights</p>
-            <p class="hit-snip">Your stay at Sumire-tei Kyoto is confirmed. Payment is due at the hotel.<i class="m-both" title="Semantic and keyword"></i></p>
-          </div>
-        </li>
+      <p class="sect">4 封結果</p>
+      <ol class="rows">
+        <li class="sel"><i class="dot"></i><div><p class="r1"><b>Sumire-tei Kyoto</b><time>9/18</time></p><p class="r2">ご宿泊の領収書（9月12日〜15日）</p><p class="r3">この度はご宿泊いただき誠にありがとうございました。領収書を添付いたします。またのお越しをお待ちしております。</p></div></li>
+        <li><i></i><div><p class="r1"><b>Mika Tanaka</b><time>9/20</time></p><p class="r2">Re: Kyoto trip expenses<svg class="flag" viewBox="0 0 12 12"><path d="M2.5 11V1.6h6.2l-1.4 2.3 1.4 2.3H3.6"/></svg></p><p class="r3">Could you forward the hotel invoice? Finance needs it before Friday to close the claim.</p></div></li>
+        <li><i></i><div><p class="r1"><b>林佳慧</b><time>9/22</time></p><p class="r2">京都出差住宿收據</p><p class="r3">住宿那張收據我放在附件，金額是日圓，報帳時記得換算成台幣再填。</p></div></li>
+        <li><i></i><div><p class="r1"><b>Northwind Travel</b><time>8/30</time></p><p class="r2">Booking confirmed: Kyoto, 3 nights</p><p class="r3">Your stay at Sumire-tei Kyoto is confirmed. Payment is due at the hotel on arrival.</p></div></li>
       </ol>
-    </figure>
-  </section>
-
-  <!-- Features, in order of what matters -->
-  <section class="feature lead" id="search">
-    <div class="feature-copy">
-      <p class="eyebrow"><span class="en">Search</span><span class="zh">搜尋</span></p>
-      <h2><span class="en">Describe it, don’t remember it</span><span class="zh">用描述的，不用記關鍵字</span></h2>
-      <p>
-        <span class="en">Type what the email was about, the way you’d say it to someone. MailSift runs your words through an embedding model on your Mac (EmbeddingGemma 2, via Core ML) and through a keyword index at the same time, then merges the two lists. The meaning side finds mail across languages: ask in Chinese, get the English or Japanese mail.</span>
-        <span class="zh">輸入那封信大概在講什麼，像跟人描述一樣。MailSift 同時用 Mac 上的嵌入模型（EmbeddingGemma 2，透過 Core ML）和關鍵字索引搜尋，再把兩份結果合併。語意這邊可以跨語言：用中文問，英文、日文的信也找得到。</span>
-      </p>
-      <ul class="facts">
-        <li><span class="en">Search works while indexing is still running: keywords cover every message right away, and meaning is added newest mail first</span><span class="zh">索引還沒跑完就能搜：關鍵字立刻涵蓋所有信，語意索引從最新的信開始補</span></li>
-        <li><span class="en">Each result shows how it was found: <i class="m-sem"></i> meaning, <i class="m-key"></i> keyword, <i class="m-both"></i> both</span><span class="zh">每筆結果標出怎麼找到的：<i class="m-sem"></i> 語意、<i class="m-key"></i> 關鍵字、<i class="m-both"></i> 兩者都有</span></li>
-        <li><span class="en">The model downloads once, inside the app</span><span class="zh">模型在 app 裡下載一次就好</span></li>
-      </ul>
     </div>
-    <!-- Mockup of the Index pane with invented numbers -->
-    <figure class="mock index" aria-label="Example index status">
-      <p class="mock-title"><span class="en">Index</span><span class="zh">索引與連接</span></p>
-      <div class="stats">
-        <div class="stat"><span class="stat-label"><span class="en">Mail</span><span class="zh">郵件</span></span><b>48,213</b></div>
-        <div class="stat"><span class="stat-label"><span class="en">Keyword</span><span class="zh">關鍵字</span></span><b>48,213</b><span class="meter"><i style="width:100%"></i></span></div>
-        <div class="stat"><span class="stat-label"><span class="en">Meaning</span><span class="zh">語意</span></span><b>12,880</b><span class="meter"><i style="width:27%"></i></span></div>
+    <div class="read">
+      <div class="tools">
+        <svg viewBox="0 0 16 16"><path d="M6 4 2.5 7.5 6 11M2.5 7.5H10a3.5 3.5 0 0 1 3.5 3.5v1"/></svg>
+        <svg viewBox="0 0 16 16"><path d="M10 4 6.5 7.5 10 11M6.5 7.5H14M6 4 2.5 7.5 6 11"/></svg>
+        <svg viewBox="0 0 16 16"><path d="M10 4l3.5 3.5L10 11m3.5-3.5H6a3.5 3.5 0 0 0-3.5 3.5v1"/></svg>
+        <span class="sp"></span>
+        <svg viewBox="0 0 16 16"><path d="M2 3h12v3H2zM3 6v7h10V6M6.5 8.5h3"/></svg>
+        <svg viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/></svg>
       </div>
-      <dl class="lines">
-        <div><dt><span class="en">Status</span><span class="zh">狀態</span></dt><dd><span class="en">Building meaning index</span><span class="zh">建立語意索引中</span></dd></div>
-        <div><dt><span class="en">Model</span><span class="zh">模型</span></dt><dd><span class="en">Loaded</span><span class="zh">已載入</span></dd></div>
-      </dl>
-    </figure>
-  </section>
-
-  <section class="feature flip" id="ai">
-    <div class="feature-copy">
-      <p class="eyebrow"><span class="en">AI side panel</span><span class="zh">AI 側欄</span></p>
-      <h2><span class="en">It proposes. You decide.</span><span class="zh">它提議，你決定</span></h2>
-      <p>
-        <span class="en">Press ⌘J and ask about your mail with Claude Code or Codex, using the login you already have; there is no API key to set up. The agent searches and reads through MailSift, but it cannot change anything on its own. To clean up, it lists each message with a checkbox and a reason. Untick what you want to keep, then confirm. Reply drafts open in Mail for you to edit and send.</span>
-        <span class="zh">按 ⌘J，用你已經登入的 Claude Code 或 Codex 問你的信，不用另外設定 API 金鑰。它透過 MailSift 搜尋、讀信，但不能自己動你的信。要整理時，它把每封信列出來，附上勾選框和理由；把想留下的取消勾選，再按確認。回信草稿會在「郵件」裡打開，由你改完再寄。</span>
-      </p>
-      <ul class="prompts" aria-label="Starter prompts">
-        <li><span class="en">Today’s to-dos</span><span class="zh">整理今天的待辦</span></li>
-        <li><span class="en">Likely spam</span><span class="zh">找出可能的垃圾郵件</span></li>
-        <li><span class="en">Mail I haven’t answered</span><span class="zh">還沒回的信</span></li>
-        <li><span class="en">Sent, still no reply</span><span class="zh">我寄出去還沒人回的</span></li>
-        <li><span class="en">Newsletters I rarely read</span><span class="zh">很少讀的電子報</span></li>
-      </ul>
-      <div class="agents">
-        <span class="agent"><img src="assets/claude.svg" width="22" height="22" alt="">Claude Code</span>
-        <span class="agent"><img class="invert-dark" src="assets/codex.svg" width="22" height="22" alt="">Codex</span>
-      </div>
+      <h2 class="subj">ご宿泊の領収書（9月12日〜15日）</h2>
+      <p class="from"><span class="av">す</span><b>Sumire-tei Kyoto</b><time>2026/9/18</time></p>
+      <p class="att"><span>receipt_0915.pdf<small>84 KB</small></span></p>
+      <div class="body"><i style="width:62%"></i><i style="width:92%"></i><i style="width:84%"></i><i style="width:40%"></i><i style="width:88%"></i><i style="width:70%"></i></div>
     </div>
-    <!-- Mockup of a proposal card with invented mail -->
-    <figure class="mock panel" aria-label="Example proposal from the AI side panel">
-      <p class="ask"><span class="en">Find likely spam</span><span class="zh">找出可能的垃圾郵件</span></p>
-      <div class="proposal">
-        <p class="prop-head"><b><span class="en">Mark as Junk</span><span class="zh">標為垃圾郵件</span></b><span class="prop-n">4 / 5 <span class="zh">封</span></span><span class="prop-all"><span class="en">Select all</span><span class="zh">全選</span></span></p>
-        <p class="prop-reason"><span class="en">Senders you’ve never written to, pushing offers or asking you to log in.</span><span class="zh">都是你沒寫過信的寄件者，內容是推銷或要你登入。</span></p>
-        <ul class="prop-list">
-          <li><i class="box on"></i><div><p>Prize Center　You’ve been selected (3 days left)</p><p class="note"><span class="en">Prize claim with an urgent deadline</span><span class="zh">中獎通知加上急迫期限</span></p></div></li>
-          <li><i class="box on"></i><div><p>Account Services　Verify your mailbox now</p><p class="note"><span class="en">Login link points to an unrelated domain</span><span class="zh">登入連結指向不相干的網域</span></p></div></li>
-          <li><i class="box on"></i><div><p>Verdant Supplements　Final hours: 70% off</p><p class="note"><span class="en">Bulk promotion, no prior contact</span><span class="zh">大量推銷，之前沒往來過</span></p></div></li>
-          <li><i class="box on"></i><div><p>SEO Growth Team　Quick question about your site</p><p class="note"><span class="en">Cold pitch, sent from a new address each week</span><span class="zh">陌生推銷，每週換一個地址寄</span></p></div></li>
-          <li class="off"><i class="box"></i><div><p>Fernway Air　Your fare alert: Taipei → Osaka</p><p class="note"><span class="en">Unsure: you opened the last two</span><span class="zh">不確定：前兩封你有打開</span></p></div></li>
-        </ul>
-        <p class="prop-foot"><span class="ink-btn"><span class="en">Confirm 4</span><span class="zh">確認 4 封</span></span><span class="line-btn"><span class="en">Cancel</span><span class="zh">取消</span></span></p>
-      </div>
-    </figure>
-  </section>
+  </figure>
 
-  <section class="feature" id="senders">
-    <div class="feature-copy">
-      <p class="eyebrow"><span class="en">Senders</span><span class="zh">寄件者</span></p>
-      <h2><span class="en">Clean up by who sends it</span><span class="zh">照寄件者一次清掉</span></h2>
-      <p>
-        <span class="en">Senders lists everyone who mails you, ranked by how many messages they’ve sent, with the account and the latest date. Select a few and move all of their mail to Trash at once, after a confirmation that shows the count. Or switch to the map, where senders sit near others who write about similar things.</span>
-        <span class="zh">「寄件者」列出每個寄信給你的人，依封數排序，附上帳號和最新一封的日期。選幾位，確認過封數後，就能把他們的信一次移到垃圾桶。也可以切到地圖，內容相近的寄件者會排在一起。</span>
-      </p>
-    </div>
-    <!-- Mockup of the Senders table with invented senders -->
-    <figure class="mock senders" aria-label="Example senders list">
-      <div class="senders-head">
-        <span class="pills"><span><span class="en">Map</span><span class="zh">地圖</span></span><span class="on"><span class="en">List</span><span class="zh">列表</span></span></span>
-        <span class="ink-btn"><span class="en">Move to Trash · 698</span><span class="zh">移到垃圾桶 · 698 封</span></span>
-      </div>
-      <table>
-        <thead><tr><th class="n"><span class="en">Count</span><span class="zh">封數</span></th><th><span class="en">Sender</span><span class="zh">寄件者</span></th><th class="d"><span class="en">Latest</span><span class="zh">最新</span></th></tr></thead>
-        <tbody>
-          <tr class="sel"><td class="n heavy">412</td><td><b>Tidewater Deals</b> <span class="addr">deals@tidewater-mail.example</span></td><td class="d">2026-10-12</td></tr>
-          <tr class="sel"><td class="n heavy">286</td><td><b>Packlane</b> <span class="addr">updates@packlane.example</span></td><td class="d">2026-10-13</td></tr>
-          <tr><td class="n heavy">133</td><td><b>The Weekly Ledger</b> <span class="addr">hello@weeklyledger.news</span></td><td class="d">2026-10-10</td></tr>
-          <tr><td class="n heavy">97</td><td><b>Orbit CI</b> <span class="addr">builds@orbit-ci.dev</span></td><td class="d">2026-10-13</td></tr>
-          <tr><td class="n">38</td><td><b>Fernway Air</b> <span class="addr">alerts@fernway.example</span></td><td class="d">2026-10-09</td></tr>
-          <tr><td class="n">21</td><td><b>Mika Tanaka</b> <span class="addr">mika@tanaka-design.jp</span></td><td class="d">2026-09-20</td></tr>
-        </tbody>
-      </table>
-    </figure>
-  </section>
-
-  <!-- The rest, smaller -->
-  <section class="more">
-    <h2 class="more-title"><span class="en">Reads like a mail client</span><span class="zh">也是一個順手的讀信工具</span></h2>
-    <div class="more-grid">
-      <div class="more-list">
-        <article>
-          <h3><span class="en">Every mailbox, by date</span><span class="zh">所有信箱，依日期分組</span></h3>
-          <p><span class="en">Inbox, Flagged, Archive, Spam and Trash across all your Mail accounts, grouped into today, yesterday, this week, this month and earlier. Flagged mail stays pinned on top of the Inbox.</span><span class="zh">所有帳號的收件匣、旗標、封存、垃圾郵件和垃圾桶，分成今天、昨天、本週、本月、更早。有旗標的信固定在收件匣最上面。</span></p>
-        </article>
-        <article>
-          <h3><span class="en">Actions go through Mail</span><span class="zh">動作交給「郵件」執行</span></h3>
-          <p><span class="en">Archive, Trash, flag, mark read or unread and mark as junk are carried out by Mail.app, so your accounts and servers stay in sync the usual way.</span><span class="zh">封存、移到垃圾桶、加旗標、標為已讀未讀、標為垃圾郵件，都交給「郵件」App 執行，帳號和伺服器照原本的方式同步。</span></p>
-        </article>
-        <article>
-          <h3><span class="en">Reply and forward in Mail</span><span class="zh">在「郵件」裡回信、轉寄</span></h3>
-          <p><span class="en">Reply, reply all, forward and ⌘N open Mail’s own compose window. MailSift never sends mail.</span><span class="zh">回覆、全部回覆、轉寄和 ⌘N 都會打開「郵件」自己的撰寫視窗。MailSift 不會替你寄信。</span></p>
-        </article>
-        <article>
-          <h3><span class="en">Attachments</span><span class="zh">附件</span></h3>
-          <p><span class="en">Open an attachment, show it in Finder or save it to Downloads, right from the message.</span><span class="zh">在信裡直接打開附件、在 Finder 中顯示，或存到「下載項目」。</span></p>
-        </article>
-      </div>
-      <!-- Keyboard reference, taken from the app's list shortcuts -->
-      <figure class="mock keys" aria-label="Keyboard shortcuts on the list">
-        <p class="mock-title"><span class="en">On the list</span><span class="zh">在列表上</span></p>
-        <dl>
-          <div><dt><kbd>j</kbd><kbd>k</kbd></dt><dd><span class="en">Next, previous</span><span class="zh">下一封、上一封</span></dd></div>
-          <div><dt><kbd>e</kbd></dt><dd><span class="en">Archive</span><span class="zh">封存</span></dd></div>
-          <div><dt><kbd>#</kbd></dt><dd><span class="en">Trash</span><span class="zh">移到垃圾桶</span></dd></div>
-          <div><dt><kbd>s</kbd></dt><dd><span class="en">Flag, unflag</span><span class="zh">加上、取消旗標</span></dd></div>
-          <div><dt><kbd>u</kbd></dt><dd><span class="en">Read, unread</span><span class="zh">已讀、未讀</span></dd></div>
-          <div><dt><kbd>r</kbd><kbd>R</kbd></dt><dd><span class="en">Reply, reply all</span><span class="zh">回覆、全部回覆</span></dd></div>
-          <div><dt><kbd>f</kbd></dt><dd><span class="en">Forward</span><span class="zh">轉寄</span></dd></div>
-          <div><dt><kbd>⌘1</kbd>–<kbd>5</kbd></dt><dd><span class="en">Switch mailbox</span><span class="zh">切換信箱</span></dd></div>
-          <div><dt><kbd>⌘J</kbd></dt><dd><span class="en">AI side panel</span><span class="zh">AI 側欄</span></dd></div>
-        </dl>
-      </figure>
-    </div>
-  </section>
-
-  <section class="feature dev" id="developers">
-    <div class="feature-copy">
-      <p class="eyebrow"><span class="en">For developers</span><span class="zh">給開發者</span></p>
-      <h2><span class="en">Give your own agent your mail</span><span class="zh">讓你自己的 agent 也能查信</span></h2>
-      <p>
-        <span class="en">The app ships a <code>mailsift</code> command-line tool that uses the same index. Every command takes <code>--json</code>, and anything that changes mail is a dry run until you add <code>--yes</code>. Run it as an MCP server and Claude Code, Codex or any MCP client can search, read threads and list senders. Changes take two steps there too: a preview with the exact count, then the action on those ids only. The Index pane shows the exact commands with the path filled in.</span>
-        <span class="zh">App 內附 <code>mailsift</code> 指令列工具，用的是同一份索引。每個指令都能加 <code>--json</code>；會改動信件的指令，沒加 <code>--yes</code> 都只是試跑。把它當 MCP 伺服器跑，Claude Code、Codex 或任何 MCP 用戶端都能搜尋、讀整串對話、列出寄件者。改動一樣分兩步：先預覽確切封數，再只對那些信執行。「索引」頁面會列出填好路徑的完整指令。</span>
-      </p>
-    </div>
-    <figure class="mock term" aria-label="Example commands">
-<pre><code><span class="c"># search from the terminal</span>
-mailsift search "the invoice from the Kyoto hotel" --limit 5
-mailsift senders --limit 20
-mailsift trash --sender deals@tidewater-mail.example   <span class="c"># dry run</span>
-
-<span class="c"># add it to your agent</span>
-claude mcp add mailsift -- …/MailSift.app/Contents/Helpers/mailsift mcp
-codex mcp add mailsift -- …/MailSift.app/Contents/Helpers/mailsift mcp</code></pre>
-    </figure>
-  </section>
-
-  <section class="privacy" id="privacy">
-    <div class="privacy-inner">
-      <h2><span class="en">Your mail stays on your Mac</span><span class="zh">信留在你的 Mac 上</span></h2>
-      <p class="privacy-lede">
-        <span class="en">MailSift reads Mail’s local data directly and keeps its index on your Mac. It uploads nothing and has no account or server.</span>
-        <span class="zh">MailSift 直接讀「郵件」在本機的資料，索引也存在你的 Mac 上。它不上傳任何東西，沒有帳號，也沒有伺服器。</span>
-      </p>
-      <div class="privacy-cols">
-        <div>
-          <h3><span class="en">When it goes online</span><span class="zh">什麼時候會連網</span></h3>
+  <!-- Three beats: one picture, one heading, one sentence each -->
+  <section class="beats">
+    <article>
+      <!-- Proposal card from the AI side panel, invented mail -->
+      <div class="card">
+        <p class="top-row"><span class="marks"><img src="assets/claude.svg" width="16" height="16" alt="Claude Code"><img class="invert-dark" src="assets/codex.svg" width="16" height="16" alt="Codex"></span><span class="ask">找出可能的垃圾郵件</span></p>
+        <div class="prop">
+          <p class="ph"><b>標為垃圾郵件</b><span>4 / 5 封</span></p>
           <ul>
-            <li><span class="en"><b>Model download.</b> Once, from Hugging Face, the first time the model is needed.</span><span class="zh"><b>下載模型。</b>第一次需要模型時，從 Hugging Face 下載一次。</span></li>
-            <li><span class="en"><b>Remote content in mail.</b> Images and fonts in a message load from the sender’s server, which lets the sender see your IP and when you read it. This is on by default; turn it off in Settings and load images per message instead.</span><span class="zh"><b>信裡的遠端內容。</b>信件中的圖片和字型會從寄件方的伺服器載入，對方因此看得到你的 IP 和讀信時間。預設是開的；可以在設定裡關掉，改成每封信個別載入。</span></li>
-            <li><span class="en"><b>AI side panel.</b> When you use it, the mail the agent reads goes to Anthropic or OpenAI through your own Claude Code or Codex.</span><span class="zh"><b>AI 側欄。</b>使用時，agent 讀到的信會透過你自己的 Claude Code 或 Codex 送到 Anthropic 或 OpenAI。</span></li>
+            <li><i class="box on"></i><div><p>Prize Center　You’ve been selected</p><small>中獎通知加上急迫期限</small></div></li>
+            <li><i class="box on"></i><div><p>Account Services　Verify your mailbox</p><small>登入連結指向不相干的網域</small></div></li>
+            <li><i class="box on"></i><div><p>Verdant Supplements　70% off</p><small>大量推銷，之前沒往來過</small></div></li>
+            <li class="off"><i class="box"></i><div><p>Fernway Air　Fare alert: Taipei → Osaka</p><small>不確定：前兩封你有打開</small></div></li>
           </ul>
-        </div>
-        <div class="consent">
-          <h3><span class="en">Full Disk Access</span><span class="zh">完整磁碟取用權限</span></h3>
-          <p><span class="en">Mail’s data lives in a protected folder, so MailSift needs Full Disk Access. That’s also why it’s distributed outside the App Store. The source is on GitHub if you want to check what it does with that access.</span><span class="zh">「郵件」的資料放在受保護的資料夾裡，所以 MailSift 需要完整磁碟取用權限，這也是它不在 App Store 上架的原因。想確認它拿這個權限做了什麼，原始碼都在 GitHub 上。</span></p>
+          <p class="pf"><span class="ink-btn">確認 4 封</span><span class="line-btn">取消</span></p>
         </div>
       </div>
-    </div>
-  </section>
+      <h3><span class="en">AI that only proposes</span><span class="zh">AI 只提議，不動手</span></h3>
+      <p><span class="en">Your own Claude Code or Codex reads your mail; you confirm every change.</span><span class="zh">用你自己的 Claude Code 或 Codex 讀信，每個改動都由你確認。</span></p>
+    </article>
 
-  <section class="closing">
-    <img src="assets/icon.png" width="64" height="64" alt="" loading="lazy">
-    <h2><span class="en">Find that email in one sentence.</span><span class="zh">那封信，一句話找回來。</span></h2>
-    <a class="btn btn-primary" href="https://github.com/t42ji2ji/mailsift/releases/latest">
-      <span class="en">Download for Mac</span><span class="zh">下載 Mac 版</span>
-    </a>
-    <p class="fine"><span class="ver">v0.1.0</span> · <span class="en">macOS 15 or later · Apple Silicon</span><span class="zh">macOS 15 以上 · Apple Silicon</span></p>
+    <article>
+      <!-- Senders list, invented senders -->
+      <div class="card">
+        <p class="sh"><span class="pills"><span>地圖</span><span class="on">列表</span></span><span class="ink-btn">移到垃圾桶 · 698 封</span></p>
+        <table>
+          <tr><th class="n">封數</th><th>寄件者</th></tr>
+          <tr class="sel"><td class="n hv">412</td><td>Tidewater Deals</td></tr>
+          <tr class="sel"><td class="n hv">286</td><td>Packlane</td></tr>
+          <tr><td class="n hv">133</td><td>The Weekly Ledger</td></tr>
+          <tr><td class="n hv">97</td><td>Orbit CI</td></tr>
+          <tr><td class="n">21</td><td>Mika Tanaka</td></tr>
+        </table>
+      </div>
+      <h3><span class="en">Clean up by sender</span><span class="zh">照寄件者清理</span></h3>
+      <p><span class="en">Pick senders, trash all their mail at once.</span><span class="zh">選幾位寄件者，一次清掉他們所有的信。</span></p>
+    </article>
+
+    <article>
+      <!-- Index and settings, invented numbers -->
+      <div class="card">
+        <div class="stats">
+          <p><small>郵件</small><b>48,213</b></p>
+          <p><small>關鍵字</small><b>48,213</b><i class="meter"><i style="width:100%"></i></i></p>
+          <p><small>語意</small><b>12,880</b><i class="meter"><i style="width:27%"></i></i></p>
+        </div>
+        <p class="row">模型<span>已載入</span></p>
+      </div>
+      <h3><span class="en">Stays on your Mac</span><span class="zh">留在你的 Mac 上</span></h3>
+      <p><span class="en">Indexing and search run on your Mac, not on a server.</span><span class="zh">索引和搜尋都在你的 Mac 上，不經過伺服器。</span></p>
+    </article>
   </section>
 </main>
 
 <footer class="foot">
-  <span>© MailSift</span>
-  <nav>
-    <a href="https://github.com/t42ji2ji/mailsift">GitHub</a>
-    <a href="https://github.com/t42ji2ji/mailsift/releases"><span class="en">Releases</span><span class="zh">版本下載</span></a>
-    <a href="https://github.com/t42ji2ji/mailsift/blob/main/LICENSE"><span class="en">License (GPL-3.0)</span><span class="zh">授權（GPL-3.0）</span></a>
-  </nav>
+  <a href="https://github.com/t42ji2ji/mailsift">GitHub</a>
+  <a href="https://github.com/t42ji2ji/mailsift/blob/main/LICENSE">GPL-3.0</a>
+  <span class="ver">v0.1.0</span>
 </footer>
 
-<script src="main.js?v=1" defer></script>
+<script src="main.js?v=2" defer></script>
 </body>
 </html>
