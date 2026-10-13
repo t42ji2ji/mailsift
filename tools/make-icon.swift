@@ -3,7 +3,8 @@ import AppKit
 //   a  實心墨色信封，右上角插一支橘旗
 //   b  線條信封，右下壓一個放大鏡，鏡片裡一顆橘點（用意思搜信）
 //   c  打開的信封，升起的信紙上是信件列，其中一列帶橘旗（篩信）
-// 用法：swift tools/make-icon.swift <a|b|c> <root>   → build/AppIcon.iconset + Resources/AppIcon.icns
+//   d  純白底 5×5 墨點，正中那格換成橘色送出紙飛機（定案，2026-10-13 跟 GPT 來回出的）
+// 用法：swift tools/make-icon.swift <a|b|c|d> <root>   → build/AppIcon.iconset + Resources/AppIcon.icns
 //       swift tools/make-icon.swift preview <root>   → build/icon-{a,b,c}.png + build/icon-options.png（不動 Resources）
 // macOS 圖示格線：1024 畫布、824 主體、圓角 185，主體下方留陰影
 func gray(_ w: CGFloat) -> CGColor { CGColor(gray: w, alpha: 1) }
@@ -20,7 +21,7 @@ func draw(_ variant: String, _ s: CGFloat) -> NSImage {
         let shape = CGPath(roundedRect: body, cornerWidth: 185, cornerHeight: 185, transform: nil)
         ctx.saveGState()
         ctx.setShadow(offset: CGSize(width: 0, height: 10 * s / 1024), blur: 24 * s / 1024, color: NSColor.black.withAlphaComponent(0.28).cgColor)
-        ctx.addPath(shape); ctx.setFillColor(canvas); ctx.fillPath()
+        ctx.addPath(shape); ctx.setFillColor(variant == "d" ? gray(1) : canvas); ctx.fillPath()
         ctx.restoreGState()
         ctx.addPath(shape); ctx.clip()
         func rr(_ r: CGRect, _ radius: CGFloat, _ c: CGColor) {
@@ -28,7 +29,7 @@ func draw(_ variant: String, _ s: CGFloat) -> NSImage {
             ctx.addPath(CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil)); ctx.fillPath()
         }
         func bar(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ c: CGColor) { rr(CGRect(x: x, y: y, width: w, height: h), min(w, h) / 2, c) }
-        let tile = canvas
+        let tile = variant == "d" ? gray(1) : canvas
         // 外圍描一圈底色，讓疊在上面的形狀和底下分開
         func halo(_ draw: () -> Void, _ width: CGFloat) {
             ctx.saveGState(); ctx.setLineWidth(width * 2); ctx.setStrokeColor(tile); ctx.setLineJoin(.round)
@@ -75,6 +76,18 @@ func draw(_ variant: String, _ s: CGFloat) -> NSImage {
             ctx.move(to: CGPoint(x: c.x + R * 0.72 + 20, y: c.y + R * 0.72 + 20)); ctx.addLine(to: CGPoint(x: 800, y: 760)); ctx.strokePath()
             ctx.setFillColor(orange)
             ctx.fillEllipse(in: CGRect(x: c.x - 48, y: c.y - 48, width: 96, height: 96))
+        case "d":
+            // 5×5 墨點，間距 123；中心那格是實心紙飛機，約兩顆點寬，朝右上
+            for r in -2...2 { for c in -2...2 where r != 0 || c != 0 {
+                let x = 512 + CGFloat(c) * 123, y = 512 + CGFloat(r) * 123
+                ctx.setFillColor(ink); ctx.fillEllipse(in: CGRect(x: x - 32, y: y - 32, width: 64, height: 64))
+            } }
+            let k: CGFloat = 0.92
+            let pts: [(CGFloat, CGFloat)] = [(71, -69), (-71, -17), (-34, 16), (12, -15), (-18, 33), (6, 68)]
+            let plane = CGMutablePath()
+            plane.addLines(between: pts.map { CGPoint(x: 512 + $0.0 * k, y: 512 + $0.1 * k) }); plane.closeSubpath()
+            ctx.setFillColor(orange); ctx.setStrokeColor(orange); ctx.setLineWidth(10); ctx.setLineJoin(.round)
+            ctx.addPath(plane); ctx.drawPath(using: .fillStroke)
         default: // c
             // 打開的信封：背板、升起的信紙（信件列＋橘旗）、前面的口袋
             rr(CGRect(x: 160, y: 448, width: 704, height: 384), 72, ink)
@@ -110,7 +123,7 @@ func png(_ img: NSImage, _ px: Int) -> Data {
 }
 // 比較表：上排淺灰底、下排深底；每格 256px 大圖，下面 32px 與 16px 實際像素（先縮再貼，不放大）
 func sheet() -> Data {
-    let variants = ["a", "b", "c"], colW = 340, rowH = 420, W = colW * 3 + 40, H = rowH * 2
+    let variants = ["a", "b", "c", "d"], colW = 340, rowH = 420, W = colW * 4 + 40, H = rowH * 2
     let rep = bitmap(W, H)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
@@ -140,12 +153,12 @@ let root = URL(fileURLWithPath: args.count > 2 ? args[2] : ".")
 let build = root.appendingPathComponent("build")
 try! FileManager.default.createDirectory(at: build, withIntermediateDirectories: true)
 if mode == "preview" {
-    for v in ["a", "b", "c"] {
+    for v in ["a", "b", "c", "d"] {
         try! png(draw(v, 1024), 1024).write(to: build.appendingPathComponent("icon-\(v).png"))
     }
     try! sheet().write(to: build.appendingPathComponent("icon-options.png"))
 } else {
-    guard ["a", "b", "c"].contains(mode) else { fatalError("variant 要是 a、b、c 或 preview") }
+    guard ["a", "b", "c", "d"].contains(mode) else { fatalError("variant 要是 a、b、c、d 或 preview") }
     let set = build.appendingPathComponent("AppIcon.iconset")
     try? FileManager.default.removeItem(at: set)
     try! FileManager.default.createDirectory(at: set, withIntermediateDirectories: true)
