@@ -50,6 +50,24 @@ enum MailScript {
         """
     }
 
+    /// Saves one attachment of message `id` to `path`; Mail fetches it from the server first if needed.
+    /// The attachment is the first whose name is one of `names`.
+    static func saveAttachment(id: Int64, in source: MailboxSpec, names: [String], to path: String) -> String {
+        let list = names.map { "\"\(escape($0))\"" }.joined(separator: ", ")
+        return """
+        tell application "Mail"
+        \tset m to «class mssg» id \(id) of \(source.reference)
+        \trepeat with a in mail attachments of m
+        \t\tif {name of a} is in {\(list)} then
+        \t\t\tsave a in POSIX file "\(escape(path))"
+        \t\t\treturn "ok"
+        \t\tend if
+        \tend repeat
+        \terror "No attachment named " & item 1 of {\(list)}
+        end tell
+        """
+    }
+
     /// Parses the script result into failures keyed by id.
     static func failures(fromOutput output: String) -> [Int64: String] {
         var out: [Int64: String] = [:]

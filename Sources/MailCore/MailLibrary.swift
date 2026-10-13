@@ -169,6 +169,10 @@ public final class MailLibrary: @unchecked Sendable {
         try source.attachmentFile(meta, attachment)
     }
 
+    public func downloadAttachment(_ meta: MessageMeta, _ attachment: Attachment) async throws -> URL {
+        try await source.downloadAttachment(meta, attachment)
+    }
+
     /// What is in Trash right now, straight from the source.
     public func trash() -> [MessageMeta] { mailbox(.trash) }
 

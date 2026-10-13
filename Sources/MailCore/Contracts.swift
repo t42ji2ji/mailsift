@@ -120,6 +120,8 @@ public protocol MailSource: Sendable {
     /// A readable file with the attachment's content: Mail's own copy when it exists, otherwise decoded from the
     /// message into a cache folder. Throws when the content isn't on disk (not downloaded by Mail yet).
     func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL
+    /// Has the mail client fetch an attachment it hasn't downloaded yet, then returns a file with its content.
+    func downloadAttachment(_ meta: MessageMeta, _ attachment: Attachment) async throws -> URL
     /// Performs the action on exactly these message ids.
     func perform(_ action: MailAction, on ids: [Int64]) async throws -> ActionReport
 }

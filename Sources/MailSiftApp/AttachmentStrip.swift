@@ -8,6 +8,8 @@ struct AttachmentStrip: View {
     let message: ParsedMessage
     let library: MailLibrary?
     @State private var error: String?
+    @State private var downloading: Set<String> = []
+    @State private var fetched: Set<String> = []
 
     private var files: [Attachment] {
         message.attachments.filter { a in
@@ -22,13 +24,13 @@ struct AttachmentStrip: View {
                 Eyebrow("附件 · \(files.count)")
                 FlowLayout(spacing: 8) {
                     ForEach(files) { a in
-                        AttachmentChip(attachment: a) { open(a, reveal: false) }
+                        AttachmentChip(attachment: a, downloaded: a.isDownloaded || fetched.contains(a.part), downloading: downloading.contains(a.part)) { open(a, reveal: false) }
                             .contextMenu {
                                 Button("打開") { open(a, reveal: false) }
                                 Button("在 Finder 中顯示") { open(a, reveal: true) }
                                 Button("存到下載項目") { saveToDownloads(a) }
                             }
-                            .disabled(!a.isDownloaded)
+                            .disabled(downloading.contains(a.part))
                     }
                 }
                 if let error { Text(error).font(.system(size: 11)).foregroundStyle(Theme.muted) }
@@ -36,10 +38,17 @@ struct AttachmentStrip: View {
         }
     }
 
-    private func file(_ a: Attachment) -> URL? {
+    /// The attachment's file, having Mail download it first when it isn't on disk yet.
+    private func file(_ a: Attachment) async -> URL? {
+        guard let library else { return nil }
+        error = nil
+        if let url = try? library.attachmentFile(message.meta, a) { return url }
+        downloading.insert(a.part)
+        defer { downloading.remove(a.part) }
         do {
-            guard let library else { return nil }
-            return try library.attachmentFile(message.meta, a)
+            let url = try await library.downloadAttachment(message.meta, a)
+            fetched.insert(a.part)
+            return url
         } catch {
             self.error = error.localizedDescription
             return nil
@@ -47,12 +56,18 @@ struct AttachmentStrip: View {
     }
 
     private func open(_ a: Attachment, reveal: Bool) {
-        guard let url = file(a) else { return }
-        if reveal { NSWorkspace.shared.activateFileViewerSelecting([url]) } else { NSWorkspace.shared.open(url) }
+        Task {
+            guard let url = await file(a) else { return }
+            if reveal { NSWorkspace.shared.activateFileViewerSelecting([url]) } else { NSWorkspace.shared.open(url) }
+        }
     }
 
     private func saveToDownloads(_ a: Attachment) {
-        guard let url = file(a) else { return }
+        Task { await copyToDownloads(a) }
+    }
+
+    private func copyToDownloads(_ a: Attachment) async {
+        guard let url = await file(a) else { return }
         let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
         var target = downloads.appendingPathComponent(url.lastPathComponent)
         var n = 2
@@ -71,6 +86,8 @@ struct AttachmentStrip: View {
 
 private struct AttachmentChip: View {
     let attachment: Attachment
+    let downloaded: Bool
+    let downloading: Bool
     let action: () -> Void
     @State private var hovering = false
 
@@ -78,6 +95,16 @@ private struct AttachmentChip: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(nsImage: icon).resizable().frame(width: 22, height: 22)
+                    .overlay(alignment: .bottomTrailing) {
+                        if downloading {
+                            ProgressView().controlSize(.mini)
+                        } else if !downloaded {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Theme.ink, Theme.paper)
+                                .offset(x: 3, y: 3)
+                        }
+                    }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(attachment.filename).font(.system(size: 12, weight: .medium)).lineLimit(1).truncationMode(.middle)
                     Text(detail).font(.system(size: 10).monospacedDigit()).foregroundStyle(Theme.muted)
@@ -88,12 +115,11 @@ private struct AttachmentChip: View {
             .frame(height: 40)
             .frame(maxWidth: 240, alignment: .leading)
             .background(hovering ? Theme.hover : Theme.fill, in: RoundedRectangle(cornerRadius: Theme.radius))
-            .opacity(attachment.isDownloaded ? 1 : 0.5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(attachment.isDownloaded ? attachment.filename : "Mail 尚未下載這個附件")
+        .help(downloaded ? attachment.filename : "點一下從伺服器下載並打開")
     }
 
     private var icon: NSImage {
@@ -104,7 +130,8 @@ private struct AttachmentChip: View {
 
     private var detail: String {
         let size = attachment.size.map { Fmt.bytes(Int64($0)) }
-        return attachment.isDownloaded ? (size ?? attachment.mimeType) : "未下載" + (size.map { " · \($0)" } ?? "")
+        if downloading { return "下載中…" }
+        return downloaded ? (size ?? attachment.mimeType) : "未下載" + (size.map { " · \($0)" } ?? "")
     }
 }
 

@@ -201,6 +201,28 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         return target
     }
 
+    public func downloadAttachment(_ meta: MessageMeta, _ attachment: Attachment) async throws -> URL {
+        let db = try openIndex()
+        let boxes = try mailboxes(db)
+        var box: AppleMailbox?
+        try db.query("select mailbox from messages where ROWID = ? and deleted = 0", [meta.id]) { box = boxes[$0.int(0)] }
+        guard let box else { throw MailSourceError.messageFileMissing(meta.id) }
+        let spec = MailScript.MailboxSpec(accountUUID: box.scheme == "local" ? nil : box.accountUUID, path: box.path)
+
+        let dir = cachesRoot.appendingPathComponent("\(meta.id)/\(attachment.part)", isDirectory: true)
+        let target = dir.appendingPathComponent(MailAttachments.sanitize(attachment.filename))
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) } catch {
+            throw MailSourceError.other("Cannot save attachment: \(error.localizedDescription)")
+        }
+        // `filename` may carry an extension Mail's name lacks (added from the MIME type).
+        let names = [attachment.filename, (attachment.filename as NSString).deletingPathExtension]
+        _ = try await runScript(MailScript.saveAttachment(id: meta.id, in: spec, names: names, to: target.path))
+        guard FileManager.default.fileExists(atPath: target.path) else {
+            throw MailSourceError.other("Mail could not download \(attachment.filename)")
+        }
+        return target
+    }
+
     static func format(_ a: MIME.Address) -> String {
         a.name.isEmpty || a.name == a.address ? a.address : "\(a.name) <\(a.address)>"
     }
