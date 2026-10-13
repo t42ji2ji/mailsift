@@ -101,7 +101,7 @@ struct MainView: View {
 
         var title: String {
             switch self {
-            case .search: "搜尋"
+            case .search: "Inbox"
             case .senders: "寄件者"
             case .status: "索引與連接"
             }
@@ -109,7 +109,7 @@ struct MainView: View {
 
         var symbol: String {
             switch self {
-            case .search: "magnifyingglass"
+            case .search: "tray"
             case .senders: "person.2"
             case .status: "circle.dashed"
             }
@@ -126,6 +126,7 @@ struct MainView: View {
 
     let app: AppModel
     @State private var pane: Pane = .search
+    @State private var showRail = true
     @State private var search: SearchModel
     @State private var senders: SendersModel
 
@@ -137,8 +138,10 @@ struct MainView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            rail
-            Rectangle().fill(Theme.hairline).frame(width: 1)
+            if showRail {
+                rail.transition(.move(edge: .leading))
+                Rectangle().fill(Theme.hairline).frame(width: 1)
+            }
             Group {
                 switch pane {
                 case .search: SearchView(app: app, model: search)
@@ -149,6 +152,15 @@ struct MainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .ignoresSafeArea(.container, edges: .top)
+        .overlay(alignment: .topLeading) {
+            // Sits in the title bar row, right of the traffic lights.
+            IconButton(symbol: "sidebar.left", help: showRail ? "隱藏側邊欄" : "顯示側邊欄") {
+                withAnimation(.easeInOut(duration: 0.2)) { showRail.toggle() }
+            }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+            .padding(.leading, 76)
+            .padding(.top, -26)
+        }
     }
 
     private var rail: some View {
