@@ -190,6 +190,7 @@ private struct HitList: View {
             .focused($focused)
             .onKeyPress(.downArrow) { move(1, proxy) }
             .onKeyPress(.upArrow) { move(-1, proxy) }
+            .onKeyPress(characters: .init(charactersIn: "jkesu#rRf")) { press in shortcut(press, proxy) }
         }
     }
 
@@ -219,6 +220,28 @@ private struct HitList: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    /// Gmail-style keys on the list: j/k move, e archive, # trash, s flag, u read/unread, r reply, R reply all, f forward.
+    private func shortcut(_ press: KeyPress, _ proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard press.modifiers.subtracting(.shift).isEmpty else { return .ignored }
+        switch press.characters {
+        case "j": return move(1, proxy)
+        case "k": return move(-1, proxy)
+        default: break
+        }
+        guard let meta = model.message?.meta, meta.id == model.selection else { return .ignored }
+        switch press.characters {
+        case "e": model.perform(.archive)
+        case "#": model.perform(.trash)
+        case "s": model.perform(meta.isFlagged ? .unflag : .flag)
+        case "u": model.perform(meta.isRead ? .markUnread : .markRead)
+        case "r": model.compose(.reply)
+        case "R": model.compose(.replyAll)
+        case "f": model.compose(.forward)
+        default: return .ignored
+        }
+        return .handled
     }
 
     private func move(_ step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
