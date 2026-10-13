@@ -50,8 +50,7 @@ struct AccessView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Step(n: 1, text: "打開「系統設定 › 隱私權與安全性 › 完整磁碟取用權限」")
                     Step(n: 2, text: "開啟 MailSift")
-                    Step(n: 3, text: "結束並重新打開 MailSift")
-                }
+                                    }
                 HStack(spacing: 10) {
                     Button("打開系統設定") { app.openFullDiskAccessSettings() }
                         .buttonStyle(InkButtonStyle())
@@ -62,6 +61,12 @@ struct AccessView: View {
         }
         .frame(maxWidth: 440, alignment: .leading)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                app.recheckAccess()
+            }
+        }
     }
 
     private struct Step: View {

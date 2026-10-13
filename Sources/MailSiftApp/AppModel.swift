@@ -54,6 +54,12 @@ final class AppModel {
         }
     }
 
+    /// Polled while the access screen is up, so granting access in System Settings continues without a relaunch.
+    func recheckAccess() {
+        guard case .needsFullDiskAccess = readiness, (try? AppleMailSource().checkAccess()) != nil else { return }
+        start()
+    }
+
     func openFullDiskAccessSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
     }
