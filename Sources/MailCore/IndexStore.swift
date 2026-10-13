@@ -352,6 +352,22 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
+    /// Mean embedding per sender (account + lowercased address) for senders with at least `minCount` vectors.
+    func senderCentroids(minCount: Int, dimension: Int = 768) throws -> [(account: String, address: String, sum: [Float], count: Int)] {
+        try read { db in
+            var groups: [String: (account: String, address: String, sum: [Float], count: Int)] = [:]
+            try db.query("SELECT m.account, lower(m.sender_address), v.vec FROM messages m JOIN vectors v ON v.id = m.id") { row in
+                let key = row.text(0) + "|" + row.text(1)
+                let halves = row.blob(2).bindMemory(to: Float16.self)
+                var g = groups[key] ?? (row.text(0), row.text(1), [Float](repeating: 0, count: dimension), 0)
+                for i in 0..<min(dimension, halves.count) { g.sum[i] += Float(halves[i]) }
+                g.count += 1
+                groups[key] = g
+            }
+            return groups.values.filter { $0.count >= minCount }
+        }
+    }
+
     func vectorState() throws -> (maxSeq: Int64, count: Int) {
         try read { db in
             var state: (maxSeq: Int64, count: Int) = (0, 0)

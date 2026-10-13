@@ -22,7 +22,7 @@ public final class MailLibrary: @unchecked Sendable {
     static let embedBodyLength = 2000
 
     public let source: MailSource
-    private let store: IndexStore
+    let store: IndexStore
     private let searcher: Searcher
     private let lock = NSLock()
     private var embedder: TextEmbedder?
