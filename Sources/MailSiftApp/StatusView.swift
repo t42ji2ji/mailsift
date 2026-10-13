@@ -46,8 +46,8 @@ struct StatusView: View {
     private var connect: some View {
         VStack(alignment: .leading, spacing: 14) {
             Eyebrow("連接 AGENT · MCP")
-            CommandBlock(label: "Claude Code", command: "claude mcp add mailsift -- \(CLIPath.quoted) mcp")
-            CommandBlock(label: "Codex", command: "codex mcp add mailsift -- \(CLIPath.quoted) mcp")
+            CommandBlock(label: "Claude Code", brand: .claude, command: "claude mcp add mailsift -- \(CLIPath.quoted) mcp")
+            CommandBlock(label: "Codex", brand: .codex, command: "codex mcp add mailsift -- \(CLIPath.quoted) mcp")
             CommandBlock(label: "CLI", command: CLIPath.url.path)
         }
     }
@@ -95,12 +95,16 @@ private struct Line: View {
 
 private struct CommandBlock: View {
     let label: String
+    var brand: AgentBackend?
     let command: String
     @State private var copied = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 12, weight: .medium))
+            HStack(spacing: 6) {
+                if let brand { BrandLogo(backend: brand, size: 13) }
+                Text(label).font(.system(size: 12, weight: .medium))
+            }
             HStack(alignment: .top, spacing: 10) {
                 Text(command)
                     .font(.system(size: 12, design: .monospaced))

@@ -26,21 +26,27 @@ final class MCPServer {
         tool("list_senders", "Senders ranked by message count, for cleanup.",
              ["account": str("Only this account email"), "limit": int("Max rows (default 50)")], required: []),
         tool("preview_action", "Dry run: which messages an action would touch. Show the count to the user before perform_action.",
-             ["action": str("trash | archive | markRead | markUnread | flag | unflag"),
+             ["action": str("trash | archive | markRead | markUnread | flag | unflag | restore"),
               "ids": ["type": "array", "items": ["type": "integer"], "description": "Message ids"],
               "sender": str("Instead of ids: every indexed message from this exact address (trash only)"),
               "account": str("Limit sender selection to this account")], required: ["action"]),
         tool("perform_action", "Apply an action to exactly these ids. Trash moves to the mailbox's Trash (recoverable for 30 days in Gmail). Only call after the user confirmed the preview.",
-             ["action": str("trash | archive | markRead | markUnread | flag | unflag"),
+             ["action": str("trash | archive | markRead | markUnread | flag | unflag | restore"),
               "ids": ["type": "array", "items": ["type": "integer"], "description": "Message ids"]], required: ["action", "ids"]),
         tool("propose_action", "Propose an action for the user to confirm in the app. Does not change mail.",
-             ["action": str("trash | archive | markRead | markUnread | flag | unflag"),
+             ["action": str("trash | archive | markRead | markUnread | flag | unflag | restore"),
               "ids": ["type": "array", "items": ["type": "integer"], "description": "Message ids"],
               "reason": str("One short sentence: why these messages")], required: ["action", "ids", "reason"]),
         tool("index_status", "How much mail is indexed (keyword and semantic).", [:], required: []),
     ]
 
     static let recentWindow = 2000
+    /// Set by MailSift's in-app assistant: it may only propose changes, so the acting tools are hidden and refused.
+    static let agentMode = ProcessInfo.processInfo.environment["MAILSIFT_AGENT"] == "1"
+    static let agentHidden: Set<String> = ["preview_action", "perform_action"]
+    static var listed: [[String: Any]] {
+        agentMode ? tools.filter { !agentHidden.contains($0["name"] as? String ?? "") } : tools
+    }
 
     static func tool(_ name: String, _ description: String, _ props: [String: Any], required: [String]) -> [String: Any] {
         ["name": name, "description": description,
@@ -63,7 +69,7 @@ final class MCPServer {
                            "capabilities": ["tools": [:]],
                            "serverInfo": ["name": "mailsift", "version": "0.1.0"]])
             case "tools/list":
-                reply(id, ["tools": Self.tools])
+                reply(id, ["tools": Self.listed])
             case "tools/call":
                 let name = params["name"] as? String ?? ""
                 let input = params["arguments"] as? [String: Any] ?? [:]
@@ -81,6 +87,7 @@ final class MCPServer {
     }
 
     func call(_ name: String, _ a: [String: Any]) async throws -> String {
+        if Self.agentMode, Self.agentHidden.contains(name) { throw MailSourceError.other("unknown tool \(name)") }
         switch name {
         case "search_mail":
             await modelReady.value

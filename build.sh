@@ -22,6 +22,7 @@ cp "$BIN/mailsift" "$APP/Contents/Helpers/mailsift"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp -R Resources/*.lproj "$APP/Contents/Resources/"
 [[ -f Resources/AppIcon.icns ]] && cp Resources/AppIcon.icns "$APP/Contents/Resources/"
+cp Resources/Brand/*.pdf "$APP/Contents/Resources/"
 
 # Inside out: the CLI first, then the bundle. Both drive Mail, so both get the Apple Events entitlement.
 if [[ "${RELEASE:-0}" == 1 ]]; then

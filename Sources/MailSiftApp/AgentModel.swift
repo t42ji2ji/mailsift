@@ -40,6 +40,10 @@ final class AgentModel {
     private(set) var running = false
     /// Sender and subject per message id, from context, tool results and lookups; for `[[id]]` links.
     private(set) var refs: [Int64: MailRef] = [:]
+    private(set) var backend: AgentBackend
+    /// Resolved CLIs; a backend missing here was not found. Empty until `resolveBackends()` finishes.
+    private(set) var launchers: [AgentBackend: Launcher] = [:]
+    private(set) var resolved = false
 
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private let search: SearchModel
@@ -54,14 +58,24 @@ final class AgentModel {
     @ObservationIgnored private var streamed = Set<String>()
     /// Confirmed or dismissed proposals since the last turn, reported in the next turn's context.
     @ObservationIgnored private var outcomes: [String] = []
-    @ObservationIgnored private var launcher: Launcher?
 
     static let tools = ["search_mail", "read_mail", "list_recent", "list_senders", "index_status", "propose_action"]
     static let workDir = MailLibrary.defaultDatabaseURL().deletingLastPathComponent().appendingPathComponent("agent")
 
+    static let backendKey = "agentBackend"
+
     init(app: AppModel, search: SearchModel) {
         self.app = app
         self.search = search
+        backend = UserDefaults.standard.string(forKey: Self.backendKey).flatMap(AgentBackend.init(rawValue:)) ?? .claude
+    }
+
+    /// Switching starts a new conversation: sessions do not carry over between CLIs.
+    func select(_ backend: AgentBackend) {
+        guard backend != self.backend else { return }
+        newConversation()
+        self.backend = backend
+        UserDefaults.standard.set(backend.rawValue, forKey: Self.backendKey)
     }
 
     var isEmpty: Bool { items.isEmpty }
@@ -93,33 +107,41 @@ final class AgentModel {
         let run = run
         let system = systemPrompt()
         outcomes = []
+        let backend = backend
         Task {
-            guard let launcher = await resolveLauncher() else {
-                guard run == self.run else { return }
-                append(.error("找不到 Claude Code。安裝並登入（在終端機執行 claude）後再試。"))
+            await resolveBackends()
+            guard run == self.run else { return }
+            guard let launcher = launchers[backend] else {
+                append(.error(Self.missing(backend)))
                 finishTurn()
                 return
             }
-            guard run == self.run else { return }
-            start(launcher, prompt: text, system: system, run: run)
+            start(launcher, backend: backend, prompt: text, system: system, run: run)
         }
     }
 
     // MARK: - Process
 
     struct Launcher {
-        var claude: String
+        var executable: String
         var path: String
+    }
+
+    static func missing(_ backend: AgentBackend) -> String {
+        switch backend {
+        case .claude: "找不到 Claude Code。安裝並登入（在終端機執行 claude）後再試。"
+        case .codex: "找不到 Codex CLI。安裝 Codex 或 ChatGPT app 並登入後再試。"
+        }
     }
 
     /// Apps started from Finder get a minimal PATH; ask the login shell, then the usual install locations
     /// (`~/.local/bin` is often only added in .zshrc, which a non-interactive login shell skips).
-    private func resolveLauncher() async -> Launcher? {
-        if let launcher { return launcher }
-        let found = await Task.detached { () -> Launcher? in
+    func resolveBackends() async {
+        guard !resolved else { return }
+        let found = await Task.detached { () -> [AgentBackend: Launcher] in
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            p.arguments = ["-lc", "command -v claude; print -r -- $PATH"]
+            p.arguments = ["-lc", "command -v claude; command -v codex; print -r -- $PATH"]
             let out = Pipe()
             p.standardOutput = out
             p.standardError = FileHandle.nullDevice
@@ -131,18 +153,32 @@ final class AgentModel {
                 lines = String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
             }
             let home = FileManager.default.homeDirectoryForCurrentUser.path
-            let candidates = lines.filter { $0.hasSuffix("/claude") }
-                + ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
-            guard let claude = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
             let path = lines.last { $0.contains(":") } ?? ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
-            return Launcher(claude: claude, path: (claude as NSString).deletingLastPathComponent + ":" + path)
+            let fallbacks: [AgentBackend: [String]] = [
+                .claude: ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude", "/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+                .codex: ["/opt/homebrew/bin/codex", "/usr/local/bin/codex",
+                         "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"],
+            ]
+            var result: [AgentBackend: Launcher] = [:]
+            for backend in AgentBackend.allCases {
+                let name = "/" + backend.rawValue
+                let candidates = lines.filter { $0.hasSuffix(name) } + fallbacks[backend, default: []]
+                guard let exe = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { continue }
+                result[backend] = Launcher(executable: exe, path: (exe as NSString).deletingLastPathComponent + ":" + path)
+            }
+            return result
         }.value
-        launcher = found
-        return found
+        launchers = found
+        resolved = true
     }
 
-    private func arguments(system: String) -> [String] {
-        let mcp: [String: Any] = ["mcpServers": ["mailsift": ["command": CLIPath.url.path, "args": ["mcp"]]]]
+    private func arguments(_ backend: AgentBackend, system: String) -> [String] {
+        backend == .claude ? claudeArguments(system: system) : codexArguments(system: system)
+    }
+
+    private func claudeArguments(system: String) -> [String] {
+        let mcp: [String: Any] = ["mcpServers": ["mailsift": ["command": CLIPath.url.path, "args": ["mcp"],
+                                                              "env": ["MAILSIFT_AGENT": "1"]]]]
         let mcpJSON = String(decoding: try! JSONSerialization.data(withJSONObject: mcp), as: UTF8.self)
         var args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                     "--strict-mcp-config", "--mcp-config", mcpJSON,
@@ -155,11 +191,37 @@ final class AgentModel {
         return args
     }
 
-    private func start(_ launcher: Launcher, prompt: String, system: String, run: Int) {
+    /// Codex features that reach outside the mail tools (shell, browser, plugins…); the sandbox is read-only too.
+    static let codexDisabled = ["shell_tool", "unified_exec", "apps", "plugins", "browser_use", "browser_use_external",
+                                "in_app_browser", "computer_use", "image_generation", "multi_agent"]
+
+    /// `codex exec [resume <id>] … -`. The user's config.toml is ignored; everything is passed with -c.
+    private func codexArguments(system: String) -> [String] {
+        func toml(_ s: String) -> String {
+            // A JSON string literal is a valid TOML basic string once slashes are left unescaped.
+            let data = try! JSONSerialization.data(withJSONObject: s, options: [.fragmentsAllowed, .withoutEscapingSlashes])
+            return String(decoding: data, as: UTF8.self)
+        }
+        var args = ["exec"]
+        if sessionID != nil { args.append("resume") }
+        args += ["--json", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
+                 "-c", "sandbox_mode=\"read-only\"", "-c", "approval_policy=\"never\"", "-c", "web_search=\"disabled\""]
+        for feature in Self.codexDisabled { args += ["--disable", feature] }
+        args += ["-c", "mcp_servers.mailsift.command=\(toml(CLIPath.url.path))",
+                 "-c", "mcp_servers.mailsift.args=[\"mcp\"]",
+                 "-c", "mcp_servers.mailsift.env.MAILSIFT_AGENT=\"1\"",
+                 "-c", "mcp_servers.mailsift.default_tools_approval_mode=\"approve\"",
+                 "-c", "developer_instructions=\(toml(system))"]
+        if let sessionID { args.append(sessionID) }
+        args.append("-")
+        return args
+    }
+
+    private func start(_ launcher: Launcher, backend: AgentBackend, prompt: String, system: String, run: Int) {
         try? FileManager.default.createDirectory(at: Self.workDir, withIntermediateDirectories: true)
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: launcher.claude)
-        p.arguments = arguments(system: system)
+        p.executableURL = URL(fileURLWithPath: launcher.executable)
+        p.arguments = arguments(backend, system: system)
         p.currentDirectoryURL = Self.workDir
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = launcher.path
@@ -172,7 +234,7 @@ final class AgentModel {
         do {
             try p.run()
         } catch {
-            append(.error("無法啟動 Claude Code：\(error.localizedDescription)"))
+            append(.error("無法啟動 \(backend.title)：\(error.localizedDescription)"))
             finishTurn()
             return
         }
@@ -194,7 +256,9 @@ final class AgentModel {
             while true {
                 let data = out.availableData
                 let lines = data.isEmpty ? buffer.finish() : buffer.append(data)
-                let events = lines.map(AgentStream.parse).filter { $0 != .ignored }
+                let events = backend == .claude
+                    ? lines.map(AgentStream.parse).filter { $0 != .ignored }
+                    : lines.flatMap(AgentStream.parseCodex).map { $0.scoped("\(run)/") }
                 if !events.isEmpty {
                     DispatchQueue.main.async { MainActor.assumeIsolated { events.forEach { self.handle($0, run: run) } } }
                 }
@@ -204,16 +268,18 @@ final class AgentModel {
             group.wait()
             let status = p.terminationStatus
             let stderrText = String(decoding: errors.data, as: UTF8.self)
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.exited(status: status, stderr: stderrText, run: run) } }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self.exited(backend, status: status, stderr: stderrText, run: run) }
+            }
         }
     }
 
-    private func exited(status: Int32, stderr: String, run: Int) {
+    private func exited(_ backend: AgentBackend, status: Int32, stderr: String, run: Int) {
         guard run == self.run else { return }
         process = nil
         if !sawResult || silentError != nil {
             let line = stderr.split(separator: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            append(.error(line.map { String($0.prefix(300)) } ?? silentError ?? "Claude Code 已結束（代碼 \(status)）"))
+            append(.error(line.map { String($0.prefix(300)) } ?? silentError ?? "\(backend.title) 已結束（代碼 \(status)）"))
         }
         finishTurn()
     }
@@ -236,7 +302,7 @@ final class AgentModel {
         switch event {
         case .initialized(let session, let mcp):
             sessionID = session
-            if mcp != "connected" { append(.error("MailSift 工具無法連線（\(mcp ?? "未啟動")）")) }
+            if let mcp { append(.error("MailSift 工具無法連線（\(mcp)）")) }
 
         case .textDelta(let message, let index, let text):
             streamed.insert(message)
@@ -280,6 +346,9 @@ final class AgentModel {
             if isError || subtype != "success" {
                 if text.isEmpty { silentError = subtype } else { append(.error(String(text.prefix(300)))) }
             }
+
+        case .failure(let text):
+            append(.error(String(text.prefix(300))))
 
         case .ignored:
             break
@@ -394,7 +463,7 @@ final class AgentModel {
             "Tools:",
             "- list_recent for time-based questions (today, this week, unread, to-dos); search_mail for topics.",
             "- read_mail before summarizing or quoting a specific message.",
-            "- To change mail (trash, archive, markRead, markUnread, flag, unflag) call propose_action with the ids and a short reason. The user confirms in the app. Never say mail was changed; say it is proposed.",
+            "- To change mail (trash, archive, markRead, markUnread, flag, unflag, restore = move out of Trash back to the inbox) call propose_action with the ids and a short reason. The user confirms in the app. Never say mail was changed; say it is proposed.",
             "- Refer to a message by writing [[id]], e.g. [[12345]]. The app renders it as a link showing sender and subject, so don't repeat them.",
         ]
         if !outcomes.isEmpty { lines += ["", "Since your last reply:"] + outcomes.map { "- " + $0 } }

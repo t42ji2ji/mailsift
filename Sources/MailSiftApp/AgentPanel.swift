@@ -13,7 +13,7 @@ struct AgentDrawer: ViewModifier {
         content
             .overlay(alignment: .bottomTrailing) {
                 if !open {
-                    AgentButton { toggle() }
+                    AgentButton(backend: model.backend) { toggle() }
                         .keyboardShortcut("j", modifiers: .command)
                         .padding(20)
                 }
@@ -32,13 +32,13 @@ struct AgentDrawer: ViewModifier {
 }
 
 private struct AgentButton: View {
+    let backend: AgentBackend
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "sparkle")
-                .font(.system(size: 17, weight: .medium))
+            BrandLogo(backend: backend, size: 20)
                 .foregroundStyle(Theme.paper)
                 .frame(width: 44, height: 44)
                 .background(Theme.ink.opacity(hovering ? 0.85 : 1), in: Circle())
@@ -47,7 +47,7 @@ private struct AgentButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("助理（⌘J）")
+        .help("助理 · \(backend.title)（⌘J）")
     }
 }
 
@@ -80,12 +80,14 @@ struct AgentPanel: View {
             return .handled
         })
         .ignoresSafeArea(.container, edges: .top)
+        .task { await model.resolveBackends() }
     }
 
     private var header: some View {
         HStack(spacing: 4) {
             Text("助理").font(.system(size: 15, weight: .semibold))
             Spacer()
+            BackendPicker(model: model).padding(.trailing, 6)
             IconButton(symbol: "square.and.pencil", help: "新對話") { model.newConversation() }
                 .disabled(model.isEmpty)
             IconButton(symbol: "xmark", help: "關閉（⌘J）", action: close)
@@ -112,8 +114,9 @@ struct AgentPanel: View {
     private var transcript: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
+                let logos = logoItems
                 ForEach(model.items) { item in
-                    AgentRow(item: item, model: model, openMessage: openMessage)
+                    AgentRow(item: item, model: model, logo: logos.contains(item.id), openMessage: openMessage)
                 }
                 if model.running, !showsProgress {
                     ProgressView().controlSize(.small).padding(.leading, 2)
@@ -125,6 +128,22 @@ struct AgentPanel: View {
         .defaultScrollAnchor(.bottom)
         .defaultScrollAnchor(.bottom, for: .sizeChanges)
         .frame(maxHeight: .infinity)
+    }
+
+    /// The first assistant reply after each user message carries the backend's logo.
+    private var logoItems: Set<Int> {
+        var ids = Set<Int>()
+        var awaiting = true
+        for item in model.items {
+            switch item.kind {
+            case .user: awaiting = true
+            case .assistant where awaiting:
+                ids.insert(item.id)
+                awaiting = false
+            default: break
+            }
+        }
+        return ids
     }
 
     /// The last row already shows activity (streaming text or a running tool).
@@ -171,11 +190,11 @@ struct AgentPanel: View {
 private struct AgentRow: View {
     let item: AgentItem
     let model: AgentModel
+    let logo: Bool
     let openMessage: (Int64) -> Void
 
     var body: some View {
-        switch item.kind {
-        case .user(let text):
+        if case .user(let text) = item.kind {
             HStack {
                 Spacer(minLength: 48)
                 Text(text)
@@ -186,6 +205,23 @@ private struct AgentRow: View {
                     .padding(.vertical, 8)
                     .background(Theme.ink, in: RoundedRectangle(cornerRadius: 12))
             }
+        } else {
+            // Agent rows share a gutter so the logo lines up with the text it introduces.
+            HStack(alignment: .top, spacing: 8) {
+                Group {
+                    if logo { BrandLogo(backend: model.backend, size: 13).foregroundStyle(Theme.muted) }
+                }
+                .frame(width: 14, alignment: .leading)
+                .padding(.top, 2)
+                content
+            }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch item.kind {
+        case .user:
+            EmptyView()
         case .assistant(let text, _):
             Text(AgentText.attributed(text, refs: model.refs))
                 .font(.system(size: 13))
@@ -297,6 +333,72 @@ private struct ProposalCard: View {
     }
 }
 
+/// Two-way switch between the CLIs. A CLI that was not found stays visible but inert, with the reason on hover.
+private struct BackendPicker: View {
+    let model: AgentModel
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(AgentBackend.allCases, id: \.self) { backend in
+                let selected = model.backend == backend
+                let available = !model.resolved || model.launchers[backend] != nil
+                Button {
+                    if available { model.select(backend) }
+                } label: {
+                    HStack(spacing: 5) {
+                        BrandLogo(backend: backend, size: 12)
+                        Text(backend.title).font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(selected ? Theme.paper : Theme.ink)
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(selected ? Theme.ink : .clear, in: RoundedRectangle(cornerRadius: 6))
+                    .opacity(available ? 1 : 0.35)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(available ? backend.title : AgentModel.missing(backend))
+            }
+        }
+        .padding(2)
+        .background(Theme.fill, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// Simple Icons marks (CC0) from Resources/Brand, drawn as templates so they follow ink and paper.
+/// Unbundled builds have no resources and fall back to an SF Symbol.
+struct BrandLogo: View {
+    let backend: AgentBackend
+    var size: CGFloat = 14
+
+    private static let images: [AgentBackend: NSImage] = {
+        var images: [AgentBackend: NSImage] = [:]
+        for backend in AgentBackend.allCases {
+            let name = backend == .claude ? "Claude" : "OpenAI"
+            guard let url = Bundle.main.url(forResource: name, withExtension: "pdf"),
+                  let image = NSImage(contentsOf: url) else { continue }
+            image.isTemplate = true
+            images[backend] = image
+        }
+        return images
+    }()
+
+    var body: some View {
+        if let image = Self.images[backend] {
+            Image(nsImage: image)
+                .renderingMode(.template)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(width: size, height: size)
+        } else {
+            Image(systemName: backend == .claude ? "asterisk" : "circle.hexagongrid")
+                .font(.system(size: size * 0.8, weight: .medium))
+                .frame(width: size, height: size)
+        }
+    }
+}
+
 /// Assistant text: inline Markdown, with `[[id]]` turned into links that open the message.
 enum AgentText {
     static let scheme = "mailsift"
@@ -309,6 +411,7 @@ enum AgentText {
         case .markUnread: "標為未讀"
         case .flag: "加旗標"
         case .unflag: "移除旗標"
+        case .restore: "還原"
         }
     }
 

@@ -1,7 +1,19 @@
 import Foundation
 
-/// One line of `claude -p --output-format stream-json --verbose --include-partial-messages`, reduced to what the
-/// agent panel uses. Foundation only, so it can be exercised outside the app.
+/// The CLI that runs the assistant.
+enum AgentBackend: String, CaseIterable, Sendable {
+    case claude, codex
+
+    var title: String {
+        switch self {
+        case .claude: "Claude Code"
+        case .codex: "Codex"
+        }
+    }
+}
+
+/// One line of `claude -p --output-format stream-json --verbose --include-partial-messages` or `codex exec --json`,
+/// reduced to what the agent panel uses. Foundation only, so it can be exercised outside the app.
 enum AgentEvent: Equatable, Sendable {
     struct ToolUse: Equatable, Sendable {
         var id: String
@@ -15,13 +27,16 @@ enum AgentEvent: Equatable, Sendable {
         case toolUse(ToolUse)
     }
 
-    case initialized(sessionID: String, mcpStatus: String?)
+    /// `mcpFailure`: the mailsift server's status when it did not connect.
+    case initialized(sessionID: String, mcpFailure: String?)
     /// Streamed text for content block `index` of message `messageID`.
     case textDelta(messageID: String, index: Int, text: String)
     /// A complete assistant message (authoritative for the blocks it carries).
     case assistant(messageID: String, blocks: [Block])
     case toolResult(toolUseID: String, isError: Bool, text: String)
     case result(sessionID: String?, isError: Bool, subtype: String, text: String, cost: Double?)
+    /// A non-fatal error reported mid-turn.
+    case failure(String)
     case ignored
 }
 
@@ -36,7 +51,7 @@ enum AgentStream {
             guard obj["subtype"] as? String == "init", let session = obj["session_id"] as? String else { return .ignored }
             let servers = obj["mcp_servers"] as? [[String: Any]] ?? []
             let status = servers.first { $0["name"] as? String == mcpServer }?["status"] as? String
-            return .initialized(sessionID: session, mcpStatus: status)
+            return .initialized(sessionID: session, mcpFailure: status == "connected" ? nil : status ?? "未啟動")
 
         case "stream_event":
             guard let event = obj["event"] as? [String: Any], event["type"] as? String == "content_block_delta",
@@ -75,6 +90,46 @@ enum AgentStream {
 
         default:
             return .ignored
+        }
+    }
+
+    /// One line of `codex exec --json`. Codex has no text deltas: messages and tool calls arrive as whole items.
+    static func parseCodex(_ line: String) -> [AgentEvent] {
+        guard let data = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        switch obj["type"] as? String {
+        case "thread.started":
+            return (obj["thread_id"] as? String).map { [.initialized(sessionID: $0, mcpFailure: nil)] } ?? []
+        case "turn.completed":
+            return [.result(sessionID: nil, isError: false, subtype: "success", text: "", cost: nil)]
+        case "turn.failed":
+            let error = obj["error"] as? [String: Any]
+            return [.result(sessionID: nil, isError: true, subtype: "error", text: error?["message"] as? String ?? "", cost: nil)]
+        case "item.started", "item.completed":
+            guard let item = obj["item"] as? [String: Any], let id = item["id"] as? String else { return [] }
+            let completed = obj["type"] as? String == "item.completed"
+            switch item["type"] as? String {
+            case "agent_message":
+                guard completed, let text = item["text"] as? String else { return [] }
+                return [.assistant(messageID: id, blocks: [.text(text)])]
+            case "mcp_tool_call":
+                let tool = item["tool"] as? String ?? ""
+                let name = item["server"] as? String == mcpServer ? "mcp__\(mcpServer)__\(tool)" : tool
+                let use = AgentEvent.assistant(messageID: id, blocks: [.toolUse(.init(
+                    id: id, name: name, input: json(item["arguments"] ?? [String: Any]())))])
+                guard completed else { return [use] }
+                let failed = item["status"] as? String == "failed"
+                let error = (item["error"] as? [String: Any])?["message"] as? String
+                let result = (item["result"] as? [String: Any])?["content"]
+                return [use, .toolResult(toolUseID: id, isError: failed, text: error ?? text(result))]
+            case "error":
+                guard let message = item["message"] as? String else { return [] }
+                return [.failure(message)]
+            default:
+                return []
+            }
+        default:
+            return []
         }
     }
 
@@ -144,4 +199,22 @@ extension AgentStream {
 
     /// Message ids written as `[[123]]`.
     static let refPattern = #/\[\[(\d+)\]\]/#
+}
+
+extension AgentEvent {
+    /// Codex numbers items per turn (item_0, item_1…); prefixing keeps keys unique across turns.
+    func scoped(_ prefix: String) -> AgentEvent {
+        switch self {
+        case .assistant(let id, let blocks):
+            return .assistant(messageID: prefix + id, blocks: blocks.map {
+                guard case .toolUse(var use) = $0 else { return $0 }
+                use.id = prefix + use.id
+                return .toolUse(use)
+            })
+        case .toolResult(let id, let isError, let text):
+            return .toolResult(toolUseID: prefix + id, isError: isError, text: text)
+        default:
+            return self
+        }
+    }
 }
