@@ -6,22 +6,31 @@ struct SearchView: View {
     @Bindable var model: SearchModel
     @State private var hasText = false
     @State private var clearToken = 0
+    /// Too narrow for list and message side by side: show one, the open message taking over the list.
+    @State private var narrow = false
 
     var body: some View {
         HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                searchBar
-                results
+            if !narrow || model.selection == nil {
+                VStack(spacing: 0) {
+                    searchBar
+                    results
+                }
+                .frame(minWidth: 320, idealWidth: 400, maxWidth: narrow ? .infinity : 460)
+                .background(Theme.paper)
             }
-            .frame(minWidth: 320, idealWidth: 400, maxWidth: 460)
-            .background(Theme.paper)
 
-            Rectangle().fill(Theme.hairline).frame(width: 1)
+            if !narrow {
+                Rectangle().fill(Theme.hairline).frame(width: 1)
+            }
 
-            MessageDetailView(model: model)
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.canvas)
+            if !narrow || model.selection != nil {
+                MessageDetailView(model: model, onBack: narrow ? { model.selection = nil } : nil)
+                    .frame(minWidth: narrow ? 0 : 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Theme.canvas)
+            }
         }
+        .onGeometryChange(for: Bool.self) { $0.size.width < 720 } action: { narrow = $0 }
     }
 
     private var searchBar: some View {
@@ -204,15 +213,18 @@ private struct HitRow: View {
                     Text(Fmt.sender(hit.meta))
                         .font(.system(size: 13, weight: hit.meta.isRead ? .medium : .bold))
                         .lineLimit(1)
-                    if hit.meta.isFlagged { Image(systemName: "flag.fill").font(.system(size: 9)) }
                     Spacer(minLength: 6)
                     Text(Fmt.short(hit.meta.date))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(Theme.muted)
                 }
-                Text(hit.meta.subject.isEmpty ? "（無主旨）" : hit.meta.subject)
-                    .font(.system(size: 13))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(hit.meta.subject.isEmpty ? "（無主旨）" : hit.meta.subject)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if hit.meta.isFlagged { Image(systemName: "flag.fill").font(.system(size: 10)) }
+                }
                 HStack(alignment: .top, spacing: 6) {
                     Text(hit.snippet)
                         .font(.system(size: 12))

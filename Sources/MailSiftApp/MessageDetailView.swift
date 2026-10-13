@@ -3,6 +3,8 @@ import SwiftUI
 
 struct MessageDetailView: View {
     @Bindable var model: SearchModel
+    /// Shown as a back button when the message has taken over the list.
+    var onBack: (() -> Void)? = nil
     @State private var plainText = false
     @State private var remoteImages = false
     @State private var confirmTrash = false
@@ -62,10 +64,17 @@ struct MessageDetailView: View {
 
     private func header(_ m: ParsedMessage) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(m.meta.subject.isEmpty ? "（無主旨）" : m.meta.subject)
-                .font(.system(size: 22, weight: .semibold))
-                .tracking(-0.3)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(m.meta.subject.isEmpty ? "（無主旨）" : m.meta.subject)
+                    .font(.system(size: 22, weight: .semibold))
+                    .tracking(-0.3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                IconButton(symbol: m.meta.isFlagged ? "flag.fill" : "flag", help: m.meta.isFlagged ? "移除旗標" : "加旗標") {
+                    model.perform(m.meta.isFlagged ? .unflag : .flag)
+                }
+                .disabled(model.actionRunning)
+            }
                 .textSelection(.enabled)
             HStack(alignment: showDetails ? .top : .center, spacing: 12) {
                 Monogram(name: Fmt.sender(m.meta))
@@ -104,6 +113,7 @@ struct MessageDetailView: View {
 
     private func actionBar(_ meta: MessageMeta, hasHTML: Bool) -> some View {
         HStack(spacing: 4) {
+            if let onBack { IconButton(symbol: "chevron.left", help: "回到列表", action: onBack) }
             Spacer()
             if model.actionRunning { ProgressView().controlSize(.mini).padding(.trailing, 6) }
             if hasHTML {
@@ -118,9 +128,6 @@ struct MessageDetailView: View {
             IconButton(symbol: "archivebox", help: "封存") { model.perform(.archive) }
             IconButton(symbol: meta.isRead ? "envelope.badge" : "envelope.open", help: meta.isRead ? "標為未讀" : "標為已讀") {
                 model.perform(meta.isRead ? .markUnread : .markRead)
-            }
-            IconButton(symbol: meta.isFlagged ? "flag.fill" : "flag", help: meta.isFlagged ? "移除旗標" : "加旗標") {
-                model.perform(meta.isFlagged ? .unflag : .flag)
             }
             IconButton(symbol: "trash", help: "移到垃圾桶") { confirmTrash = true }
         }

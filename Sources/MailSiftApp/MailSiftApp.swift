@@ -8,7 +8,7 @@ struct MailSiftApp: App {
     var body: some Scene {
         Window("MailSift", id: "main") {
             RootView(app: app)
-                .frame(minWidth: 880, minHeight: 560)
+                .frame(minWidth: 600, minHeight: 560)
                 .background(Theme.canvas)
                 .task { app.start() }
         }
