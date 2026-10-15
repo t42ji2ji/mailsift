@@ -24,6 +24,15 @@ final class AppleMailStoreTests: XCTestCase {
 
     // MARK: Scripts
 
+    func testMessageFilePaths() {
+        // Paths seen in a real store.
+        let cases: [(Int64, String)] = [(48166, "8/4/"), (119855, "9/1/1/"), (125252, "5/2/1/"), (7, "")]
+        for (id, levels) in cases {
+            XCTAssertEqual(AppleMailSource.messageFileCandidates(id, storeDir: "S"),
+                           ["S/Data/\(levels)Messages/\(id).emlx", "S/Data/\(levels)Messages/\(id).partial.emlx"])
+        }
+    }
+
     func testScriptText() {
         let src = MailScript.MailboxSpec(accountUUID: "ABC", path: "[Gmail]/全部郵件")
         let s = MailScript.script(.markRead, ids: [1, 22], source: src)

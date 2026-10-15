@@ -187,12 +187,15 @@ public protocol MailSource: Sendable {
     func correspondents() throws -> Set<String>
     /// Every mail account the client has set up, including ones still downloading.
     func accounts() throws -> [String]
+    /// Changes whenever the client's store does; nil when unknown (every sync then reads the source).
+    func changeToken() -> String?
 }
 
 public extension MailSource {
     func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals] { [:] }
     func correspondents() throws -> Set<String> { [] }
     func accounts() throws -> [String] { [] }
+    func changeToken() -> String? { nil }
 }
 
 /// What the mail client knows beyond the headers MailSift indexes.

@@ -73,7 +73,7 @@ final class AppModel {
     /// Cancels the running sync/embedding and starts over (both resume where they stopped).
     func resync() {
         guard let lib = library else { return }
-        runIndex(lib)
+        runIndex(lib, force: true)
     }
 
     /// New mail arrives through Mail.app; pick it up every minute (sync only reads what changed).
@@ -115,7 +115,7 @@ final class AppModel {
 
     /// Sync first (keyword search), then embed once both sync and the model are done.
     /// `MailLibrary` refuses overlapping index runs, so the previous run is cancelled and awaited first.
-    private func runIndex(_ lib: MailLibrary) {
+    private func runIndex(_ lib: MailLibrary, force: Bool = false) {
         let previous = indexTask
         previous?.cancel()
         let report: MailLibrary.Progress = { s in
@@ -124,12 +124,15 @@ final class AppModel {
         indexTask = Task {
             await previous?.value
             indexing = true
+            // Nothing changed in Mail: the lists stay as they are.
+            var changed = true
             defer {
                 indexing = false
-                indexRevision += 1
+                if changed { indexRevision += 1 }
             }
             do {
-                try await lib.sync(progress: report)
+                changed = try await lib.sync(force: force, progress: report)
+                guard changed else { return }
                 // New mail is listable now; don't hold the lists until embedding finishes.
                 indexRevision += 1
                 // Polled rather than awaited so that a resync during the model download can cancel this run.

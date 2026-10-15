@@ -15,6 +15,12 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
     private let scanLock = NSLock()
     private var cachedFiles: [Int64: String]?
     private var scannedAt = Date.distantPast
+    /// Mailbox ROWID → the folder holding its `Data`.
+    private var mailboxDirs: [Int64: String] = [:]
+    /// Rows with no file at the last walk (Mail never downloaded them), and how many lists in a row each newer
+    /// row has had no file.
+    private var missingAtWalk: Set<Int64> = []
+    private var misses: [Int64: Int] = [:]
 
     /// - Parameters:
     ///   - libraryMail: `~/Library/Mail`; the newest `V<n>` directory inside is used.
@@ -79,13 +85,60 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         return files
     }
 
-    /// The cached map, rescanned when `id` is missing unless a scan ran in the last 30 s (new mail arrives rarely;
-    /// a message trashed mid-index must not trigger a full walk per message).
-    private func messageFile(_ id: Int64) throws -> String? {
-        let files = try messageFiles()
-        if let p = files[id] { return p }
+    /// The cached path while the file is there (a .partial.emlx is renamed once Mail has the whole message), else
+    /// computed from the mailbox, else rescanned unless a scan ran in the last 30 s (a message trashed mid-index must
+    /// not trigger a full walk per message).
+    private func messageFile(_ meta: MessageMeta) throws -> String? {
+        let id = meta.id
+        if let p = try messageFiles()[id], FileManager.default.fileExists(atPath: p) { return p }
+        lock.lock(); let dir = mailboxDirs[meta.mailbox.id]; lock.unlock()
+        if let dir, let p = Self.existingMessageFile(id, storeDir: dir) {
+            lock.lock(); cachedFiles?[id] = p; lock.unlock()
+            return p
+        }
         lock.lock(); let recent = Date().timeIntervalSince(scannedAt) < 30; lock.unlock()
         return recent ? nil : try messageFiles(refresh: true)[id]
+    }
+
+    /// Where Mail keeps a message under its mailbox's store folder: `Data/<digits of ROWID/1000, last first>/
+    /// Messages/<ROWID>.emlx`, or `.partial.emlx` until the whole message is downloaded (48166 → Data/8/4/Messages;
+    /// below 1000, Data/Messages).
+    static func messageFileCandidates(_ id: Int64, storeDir: String) -> [String] {
+        let levels = id < 1000 ? "" : String(id / 1000).reversed().map { "\($0)/" }.joined()
+        let dir = storeDir + "/Data/" + levels + "Messages/"
+        return [dir + "\(id).emlx", dir + "\(id).partial.emlx"]
+    }
+
+    static func existingMessageFile(_ id: Int64, storeDir: String) -> String? {
+        messageFileCandidates(id, storeDir: storeDir).first { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// `<account>/<each path component>.mbox/<store UUID>`: the folder that holds the mailbox's `Data`.
+    private func mailboxDir(_ mb: AppleMailbox, root: URL) -> String? {
+        lock.lock(); let cached = mailboxDirs[mb.id]; lock.unlock()
+        if let cached { return cached }
+        let fm = FileManager.default
+        var dir = root.appendingPathComponent(mb.accountUUID)
+        for part in mb.path.split(separator: "/") { dir.appendPathComponent(part + ".mbox") }
+        guard let store = (try? fm.contentsOfDirectory(atPath: dir.path))?
+            .first(where: { !$0.hasSuffix(".mbox") && fm.fileExists(atPath: dir.path + "/" + $0 + "/Data") })
+        else { return nil }
+        let path = dir.path + "/" + store
+        lock.lock(); mailboxDirs[mb.id] = path; lock.unlock()
+        return path
+    }
+
+    /// Records the rows without a file; true when a walk should look for them. Only rows newer than the last walk
+    /// that stay missing over three lists count, so neither never-downloaded mail nor mail mid-download sets one off.
+    private func recordMissing(_ missing: Set<Int64>, walked: Bool) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if walked {
+            missingAtWalk = missing
+            misses = [:]
+            return false
+        }
+        misses = missing.subtracting(missingAtWalk).reduce(into: [:]) { $0[$1] = (misses[$1] ?? 0) + 1 }
+        return misses.values.contains { $0 >= 3 }
     }
 
     // MARK: MailSource
@@ -109,7 +162,10 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         let db = try openIndex()
         let boxes = try mailboxes(db)
         let emails = AppleAccounts.emailsByUUID(accountsDB: accountsDB)
-        let files = try messageFiles(refresh: true)
+        // One walk per launch; after that only rows not seen before have their file looked up, by computed path.
+        let root = try storeRoot()
+        lock.lock(); let walked = cachedFiles == nil; lock.unlock()
+        var files = try messageFiles()
 
         var refs: [Int64: MailboxRef] = [:]
         for (id, mb) in boxes where include(mb) {
@@ -129,6 +185,7 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
 
         struct Row { var meta: MessageMeta; var gid: Int64; var account: String }
         var rows: [Row] = []
+        var found: [Int64: String] = [:], missing = Set<Int64>()
         rows.reserveCapacity(files.count)
         try db.query("""
             select m.ROWID, m.mailbox, m.date_received, m.subject_prefix, s.subject, a.address, a.comment,
@@ -140,7 +197,17 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
             order by m.date_received desc, m.ROWID desc
             """) { r in
             let id = r.int(0)
-            guard let ref = refs[r.int(1)], let mb = boxes[r.int(1)], files[id] != nil else { return }
+            guard let mb = boxes[r.int(1)] else { return }
+            // Every mailbox, not just the included ones, so lists of different boxes agree on what is missing.
+            if files[id] == nil {
+                if let dir = mailboxDir(mb, root: root), let p = Self.existingMessageFile(id, storeDir: dir) {
+                    files[id] = p
+                    found[id] = p
+                } else {
+                    missing.insert(id)
+                }
+            }
+            guard let ref = refs[r.int(1)] else { return }
             let inInbox: Bool
             switch mb.role {
             case .trash, .spam, .drafts: inInbox = false
@@ -153,6 +220,16 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
                 isRead: r.int(7) != 0, isFlagged: r.int(8) != 0, inInbox: inInbox)
             rows.append(Row(meta: meta, gid: r.int(9), account: mb.accountUUID))
         }
+
+        if !found.isEmpty {
+            lock.lock(); cachedFiles?.merge(found) { _, new in new }; lock.unlock()
+        }
+        if recordMissing(missing, walked: walked) {
+            files = try messageFiles(refresh: true)
+            missing = missing.filter { files[$0] == nil }
+            _ = recordMissing(missing, walked: true)
+        }
+        rows.removeAll { missing.contains($0.meta.id) }
 
         // Gmail: a message seen in All Mail and in a label mailbox is listed once, from All Mail.
         var inAllMail = Set<String>()
@@ -191,6 +268,18 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         return Array(Set(uuids.compactMap { emails[$0] })).sorted()
     }
 
+    /// Size and modification time of the Envelope Index and its WAL: Mail writes one of them for every change (new
+    /// mail, read, flagged, moved). Not -shm, which readers touch too.
+    public func changeToken() -> String? {
+        guard let data = try? storeRoot().appendingPathComponent("MailData") else { return nil }
+        return ["Envelope Index", "Envelope Index-wal"].map { name in
+            let a = try? FileManager.default.attributesOfItem(atPath: data.appendingPathComponent(name).path)
+            let size = (a?[.size] as? NSNumber)?.int64Value ?? -1
+            let date = (a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            return "\(size)@\(date)"
+        }.joined(separator: " ")
+    }
+
     public func correspondents() throws -> Set<String> {
         let mine = Set(AppleAccounts.emailsByUUID(accountsDB: accountsDB).values)
         guard !mine.isEmpty else { return [] }
@@ -209,7 +298,7 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
     static func sqlList(_ ids: [Int64]) -> String { ids.map(String.init).joined(separator: ",") }
 
     public func parse(_ meta: MessageMeta) throws -> ParsedMessage {
-        guard let path = try messageFile(meta.id) else { throw MailSourceError.messageFileMissing(meta.id) }
+        guard let path = try messageFile(meta) else { throw MailSourceError.messageFileMissing(meta.id) }
         let parsed = try AppleMailSource.parseFile(path: path, id: meta.id)
         guard let parsed else { throw MailSourceError.messageFileMissing(meta.id) }
         var m = meta
@@ -223,7 +312,7 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
     /// Mail's own saved copy when it has one; otherwise the part decoded from the .emlx into
     /// ~/Library/Caches/MailSift/attachments/<id>/<part>/ (written once, reused).
     public func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL {
-        guard let path = try messageFile(meta.id) else { throw MailSourceError.messageFileMissing(meta.id) }
+        guard let path = try messageFile(meta) else { throw MailSourceError.messageFileMissing(meta.id) }
         let mailDir = MailAttachments.attachmentsDir(forEmlx: path, id: meta.id)
         if let f = MailAttachments.diskFile(in: mailDir, part: attachment.part) { return f }
 

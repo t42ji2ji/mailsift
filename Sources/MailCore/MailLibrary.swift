@@ -28,6 +28,11 @@ public final class MailLibrary: @unchecked Sendable {
     var embedder: TextEmbedder?
     private var current: IndexStatus
     private var indexing = false
+    /// The source's change token at the last sync that finished, and when.
+    private var synced: (token: String, at: Date)?
+    /// Each message's meta as sync last wrote it, so later syncs write only what changed: a row update rewrites the
+    /// whole row, body included.
+    private var writtenMeta: [Int64: Int] = [:]
 
     public init(source: MailSource, embedder: TextEmbedder?, databaseURL: URL = MailLibrary.defaultDatabaseURL()) throws {
         self.source = source
@@ -55,8 +60,18 @@ public final class MailLibrary: @unchecked Sendable {
     // MARK: - Indexing
 
     /// Brings the keyword index in line with the source: removes messages that are gone, adds new ones.
-    public func sync(progress: Progress? = nil) async throws {
+    /// Skipped when the source reports no change since the last sync, up to ten minutes (a message file can land
+    /// after its row without the store changing again). Returns whether it read the source.
+    @discardableResult
+    public func sync(force: Bool = false, progress: Progress? = nil) async throws -> Bool {
+        let token = source.changeToken()
+        if !force, let token, let synced = locked({ synced }), synced.token == token,
+           Date().timeIntervalSince(synced.at) < 600 {
+            return false
+        }
         try await indexRun(progress) { try await self.syncMessages(progress) }
+        if let token { locked { synced = (token, Date()) } }
+        return true
     }
 
     /// Embeds messages that have no vector yet, newest first. Cancellable; resumes where it stopped.
@@ -98,7 +113,9 @@ public final class MailLibrary: @unchecked Sendable {
             try store.delete(Array(gone))
             searcher.invalidate()
         }
-        try store.updateMeta(metas.filter { stored.contains($0.id) })
+        let existing = metas.filter { stored.contains($0.id) }
+        try store.updateMeta(locked { existing.filter { writtenMeta[$0.id] != $0.hashValue } })
+        locked { writtenMeta = existing.reduce(into: [:]) { $0[$1.id] = $1.hashValue } }
         try refreshCounts(progress) { $0.totalMessages = metas.count }
 
         let new = metas.filter { !stored.contains($0.id) }
@@ -261,6 +278,8 @@ public final class MailLibrary: @unchecked Sendable {
     public func perform(_ action: MailAction, ids: [Int64]) async throws -> ActionReport {
         let result = try await source.perform(action, on: ids)
         let done = result.succeeded
+        // The index now differs from what sync wrote; the next sync writes these again.
+        locked { for id in done { writtenMeta[id] = nil } }
         switch action {
         case .trash, .junk:  // neither Trash nor Spam is indexed
             try store.delete(done)
