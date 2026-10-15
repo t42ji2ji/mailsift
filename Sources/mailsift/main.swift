@@ -156,11 +156,17 @@ case "index":
 case "search":
     let query = args.positional.dropFirst().joined(separator: " ")
     if query.isEmpty { fail("search needs a query", json: json) }
-    let lib = await openLibrary(json: json, loadModel: modelInstalled())
     let filter = SearchFilter(account: args.options["account"], sender: args.options["sender"],
                               after: args.date("after"), before: args.date("before"))
+    let limit = args.int("limit") ?? 20
     do {
-        let hits = try await lib.search(query, filter: filter, limit: args.int("limit") ?? 20)
+        // The running app answers with its model already in memory; otherwise this process loads its own.
+        let hits: [SearchHit]
+        if let served = SearchService.search(query, filter: filter, limit: limit) {
+            hits = served
+        } else {
+            hits = try await openLibrary(json: json, loadModel: modelInstalled()).search(query, filter: filter, limit: limit)
+        }
         if json {
             printJSON(["query": AnyEncodable(query), "hits": AnyEncodable(hits)])
         } else {
