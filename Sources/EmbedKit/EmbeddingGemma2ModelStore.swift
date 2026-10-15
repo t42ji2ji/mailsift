@@ -3,7 +3,8 @@ import CryptoKit
 import Foundation
 
 /// Downloads the pinned EmbeddingGemma 2 Core ML packages, token table, and tokenizer from Hugging Face into the
-/// FluidUse cache, verifies every file, and compiles each package once (`<name>.mlmodelc` beside it). Text and audio
+/// FluidUse cache, verifies every file, and compiles each package once (`<name>.mlmodelc` beside it; the package is
+/// then deleted, since only the compiled model is loaded). Text and audio
 /// are separate bundles, each pinned to the revision that added it, so adding audio never recompiles the text model.
 public enum EmbeddingGemma2ModelStore {
     public typealias Progress = @Sendable (_ file: String, _ bytes: Int64) -> Void
@@ -74,12 +75,15 @@ public enum EmbeddingGemma2ModelStore {
         let verified = directory.appendingPathComponent(verifiedName)
         let compiled = directory.appendingPathComponent("\(package).mlmodelc")
         let stamp = compiled.appendingPathComponent("fluiduse-revision")
+        let packageDir = directory.appendingPathComponent("\(package).mlpackage")
+        // Once this revision is compiled the package is no longer needed, so it is neither required nor downloaded.
+        let compiledCurrent = (try? String(contentsOf: stamp, encoding: .utf8)) == revision
+        let assets = compiledCurrent ? assets.filter { !$0.path.hasPrefix("\(package).mlpackage/") } : assets
         let allPresent = assets.allSatisfy {
             manager.fileExists(atPath: directory.appendingPathComponent($0.path).path)
         }
-        if allPresent, manager.fileExists(atPath: verified.path),
-            (try? String(contentsOf: stamp, encoding: .utf8)) == revision
-        {
+        if allPresent, manager.fileExists(atPath: verified.path), compiledCurrent {
+            try? manager.removeItem(at: packageDir)
             return directory
         }
         try? manager.removeItem(at: verified)
@@ -111,9 +115,9 @@ public enum EmbeddingGemma2ModelStore {
         }
         // Recompile unless the compiled model carries this revision's stamp (a revision bump or an interrupted
         // compile leaves an old or missing stamp). Staged rename, so a reader never sees a half-written bundle.
-        if (try? String(contentsOf: stamp, encoding: .utf8)) != revision {
+        if !compiledCurrent {
             progress?("\(package).mlmodelc", 0)
-            let temporary = try await MLModel.compileModel(at: directory.appendingPathComponent("\(package).mlpackage"))
+            let temporary = try await MLModel.compileModel(at: packageDir)
             try revision.write(
                 to: temporary.appendingPathComponent("fluiduse-revision"), atomically: true, encoding: .utf8)
             let staged = directory.appendingPathComponent("\(package).\(UUID().uuidString).mlmodelc")
@@ -123,6 +127,7 @@ public enum EmbeddingGemma2ModelStore {
             try manager.moveItem(at: staged, to: compiled)
             try? manager.removeItem(at: retired)
         }
+        try? manager.removeItem(at: packageDir)
         manager.createFile(atPath: verified.path, contents: Data())
         return directory
     }
