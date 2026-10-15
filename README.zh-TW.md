@@ -18,9 +18,11 @@
 
 **更快的信箱。** 收件匣、旗標、封存、垃圾桶、垃圾郵件，依日期分區。列表鍵盤操作：`j`／`k` 上下、`e` 封存、`#` 丟垃圾桶、`s` 旗標、`u` 已讀／未讀、`r`／`R` 回覆、`f` 轉寄。
 
+**照用途分類。** 每封信都在你的 Mac 上自動標好用途：工作、關係、交易、通知、開發、電子報、促銷。點列表上方的類別就只看那一類；在設定裡可以排序、隱藏，或用一句描述加上自己的類別。
+
 **依寄件者清理。** 看誰寄最多，選好寄件者，一次把他們的信全部移到垃圾桶。
 
-**用你已經在用的 AI。** 按 ⌘J，請 Mac 上的 [Claude Code](https://code.claude.com/docs/en/setup) 或 [Codex](https://developers.openai.com/codex/cli) 處理信件，用你自己的登入，不用另外申請 API 金鑰。它透過 MailSift 搜尋和讀信，但只能**提議**變更：每封信列出勾選框和理由，你取消不要的、再確認。回覆草稿會在 Mail 開啟，不會替你寄出。
+**用你已經在用的 AI。** 按 ⌘J，請 Mac 上的 [Claude Code](https://code.claude.com/docs/en/setup) 或 [Codex](https://developers.openai.com/codex/cli) 處理信件，用你自己的登入，不用另外申請 API 金鑰。它透過 MailSift 搜尋和讀信，但只能**提議**變更：每封信列出勾選框和理由，你取消不要的、再確認。它也能替打開的信起草回覆，草稿會在 Mail 開啟，不會替你寄出。對話會保留下來，可以從歷史接著聊。
 
 **給你自己的 agent。** App 內附 `mailsift` 指令列工具和 MCP server：
 

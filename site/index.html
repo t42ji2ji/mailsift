@@ -31,7 +31,7 @@
     document.documentElement.lang = lang === "zh" ? "zh-Hant-TW" : "en";
   })();
 </script>
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 
@@ -101,12 +101,53 @@
     </div>
   </figure>
 
-  <!-- Three beats: one picture, one heading, one sentence each -->
-  <section class="beats">
-    <article>
-      <!-- Proposal card from the AI side panel, invented mail -->
-      <div class="card">
-        <p class="top-row"><span class="marks"><img src="assets/claude.svg" width="16" height="16" alt="Claude Code"><img class="invert-dark" src="assets/codex.svg" width="16" height="16" alt="Codex"></span><span class="ask">找出可能的垃圾郵件</span></p>
+  <!-- Topic chips over Inbox, picked on 交易; invented mail -->
+  <section class="feature">
+    <div class="copy">
+      <h2><span class="en">Sorted by what it’s for</span><span class="zh">照用途自動分好</span></h2>
+      <p><span class="en">Every message is labelled on your Mac: work, people, transactions, notifications, dev, newsletters, promotions. Pick a topic to see only that kind of mail. Reorder, hide or add your own in Settings.</span><span class="zh">每封信都在你的 Mac 上自動標好用途：工作、關係、交易、通知、開發、電子報、促銷。點一個類別就只看那一類；在設定裡可以排序、隱藏，或加上自己的類別。</span></p>
+    </div>
+    <figure class="pane topics-pane" aria-label="Topic chips over the mail list">
+      <div class="field"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.6"/><path d="m10.4 10.4 3.4 3.4"/></svg><span class="ph-text">用一句話描述你要找的信</span></div>
+      <div class="chips">
+        <span class="chip">全部</span>
+        <span class="chip">工作<small>1,204</small></span>
+        <span class="chip">關係<small>86</small></span>
+        <span class="chip on">交易<small>2,918</small></span>
+        <span class="chip">通知<small>3,051</small></span>
+        <span class="chip">開發<small>4,377</small></span>
+        <span class="chip">電子報<small>3,902</small></span>
+      </div>
+      <p class="sect">今天</p>
+      <ol class="rows">
+        <li><i class="dot"></i><div><p class="r1"><b>Harbor Bank</b><time>12:04</time></p><p class="r2">刷卡消費通知 NT$1,280</p><p class="r3">您的信用卡於 10/15 12:04 在 Greenleaf Market 消費 NT$1,280，如非本人消費請立即與我們聯繫。</p></div></li>
+        <li><i></i><div><p class="r1"><b>Packlane</b><time>09:31</time></p><p class="r2">Your order has shipped</p><p class="r3">Order #48213 is on its way and should arrive Friday. Track your package any time from your account.</p></div></li>
+      </ol>
+      <p class="sect">昨天</p>
+      <ol class="rows">
+        <li><i></i><div><p class="r1"><b>Northwind Air</b><time>10/14</time></p><p class="r2">電子機票收據：台北 → 大阪</p><p class="r3">感謝您的訂購，附件為本次行程的電子機票與收據，登機前請再次確認航班時間。</p></div></li>
+        <li><i></i><div><p class="r1"><b>Sumire-tei Kyoto</b><time>10/14</time></p><p class="r2">ご予約確認（11月3日〜6日）</p><p class="r3">ご予約ありがとうございます。チェックインは15時からとなります。お気をつけてお越しください。</p></div></li>
+      </ol>
+    </figure>
+  </section>
+
+  <!-- The ⌘J assistant panel as in the app; invented mail -->
+  <section class="feature flip">
+    <div class="copy">
+      <h2><span class="en">AI that only proposes</span><span class="zh">AI 只提議，不動手</span></h2>
+      <p><span class="en">Press ⌘J to ask your own Claude Code or Codex about your mail. It searches and reads through MailSift, gives a reason for every message it wants to change, and can start a reply draft. Nothing changes until you confirm, and past conversations stay in the history.</span><span class="zh">按 ⌘J，用你自己的 Claude Code 或 Codex 問信件。它透過 MailSift 搜尋、讀信，想改動的每封信都附上理由，也能幫你起草回覆。你按確認之前什麼都不會動，聊過的對話也會留在歷史裡。</span></p>
+    </div>
+    <figure class="pane agent-pane" aria-label="The assistant panel proposing to mark mail as spam">
+      <div class="ahead">
+        <span class="seg"><span class="on"><img src="assets/claude.svg" width="14" height="14" alt="">Claude Code</span><span><img class="invert-dark" src="assets/codex.svg" width="14" height="14" alt="">Codex</span></span>
+        <span class="sp"></span>
+        <svg viewBox="0 0 16 16"><path d="M8.5 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-5M6.5 9.5l.4-2 5.6-5.6a1.1 1.1 0 0 1 1.6 1.6L8.5 9.1z"/></svg>
+        <svg viewBox="0 0 16 16"><path d="M2.6 8a5.4 5.4 0 1 0 1.6-3.8M2.5 2.5v2.2h2.2M8 5v3.2l2 1.3"/></svg>
+      </div>
+      <div class="convo">
+        <p class="bubble">找出可能的垃圾郵件</p>
+        <p class="step">✓ 搜尋「verify your account」「you’ve been selected」</p>
+        <p class="step">✓ 讀取 5 封信</p>
         <div class="prop">
           <p class="ph"><b>標為垃圾郵件</b><span>4 / 5 封</span></p>
           <ul>
@@ -117,41 +158,10 @@
           </ul>
           <p class="pf"><span class="ink-btn">確認 4 封</span><span class="line-btn">取消</span></p>
         </div>
+        <div class="reply"><img class="invert-dark" src="assets/claude.svg" width="14" height="14" alt=""><p>有 4 封像垃圾郵件：中獎通知、假的帳號驗證和陌生的推銷，已經列成提議。Fernway Air 那封你之前打開過，我先不勾，要不要一起處理由你決定。</p></div>
       </div>
-      <h3><span class="en">AI that only proposes</span><span class="zh">AI 只提議，不動手</span></h3>
-      <p><span class="en">Your own Claude Code or Codex reads your mail; you confirm every change.</span><span class="zh">用你自己的 Claude Code 或 Codex 讀信，每個改動都由你確認。</span></p>
-    </article>
-
-    <article>
-      <!-- Senders list, invented senders -->
-      <div class="card">
-        <p class="sh"><span class="pills"><span>地圖</span><span class="on">列表</span></span><span class="ink-btn">移到垃圾桶 · 698 封</span></p>
-        <table>
-          <tr><th class="n">封數</th><th>寄件者</th></tr>
-          <tr class="sel"><td class="n hv">412</td><td>Tidewater Deals</td></tr>
-          <tr class="sel"><td class="n hv">286</td><td>Packlane</td></tr>
-          <tr><td class="n hv">133</td><td>The Weekly Ledger</td></tr>
-          <tr><td class="n hv">97</td><td>Orbit CI</td></tr>
-          <tr><td class="n">21</td><td>Mika Tanaka</td></tr>
-        </table>
-      </div>
-      <h3><span class="en">Clean up by sender</span><span class="zh">照寄件者清理</span></h3>
-      <p><span class="en">Pick senders, trash all their mail at once.</span><span class="zh">選幾位寄件者，一次清掉他們所有的信。</span></p>
-    </article>
-
-    <article>
-      <!-- Index and settings, invented numbers -->
-      <div class="card">
-        <div class="stats">
-          <p><small>郵件</small><b>48,213</b></p>
-          <p><small>關鍵字</small><b>48,213</b><i class="meter"><i style="width:100%"></i></i></p>
-          <p><small>語意</small><b>12,880</b><i class="meter"><i style="width:27%"></i></i></p>
-        </div>
-        <p class="row">模型<span>已載入</span></p>
-      </div>
-      <h3><span class="en">Stays on your Mac</span><span class="zh">留在你的 Mac 上</span></h3>
-      <p><span class="en">Indexing and search run on your Mac, not on a server.</span><span class="zh">索引和搜尋都在你的 Mac 上，不經過伺服器。</span></p>
-    </article>
+      <p class="composer">問問你的信件<svg viewBox="0 0 16 16"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg></p>
+    </figure>
   </section>
 </main>
 
