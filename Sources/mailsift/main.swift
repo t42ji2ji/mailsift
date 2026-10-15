@@ -240,13 +240,14 @@ case "trash", "archive", "mark-read", "mark-unread", "flag", "unflag":
     }
 
 case "mcp":
-    // Answer the MCP handshake right away; clients time out while the model (seconds to minutes) loads.
+    // Searches go to the running app; this process loads its own model only when the app cannot answer.
     let lib = await openLibrary(json: false, loadModel: false)
-    let modelReady = Task {
-        guard modelInstalled(), let embedder = try? await CoreMLEmbedder.load() else { return }
-        lib.setEmbedder(embedder)
-    }
-    await MCPServer(library: lib, modelReady: modelReady).run()
+    await MCPServer(library: lib) {
+        Task {
+            guard modelInstalled(), let embedder = try? await CoreMLEmbedder.load() else { return }
+            lib.setEmbedder(embedder)
+        }
+    }.run()
 
 default:
     print(usage)

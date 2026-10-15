@@ -130,3 +130,30 @@ struct Eyebrow: View {
             .foregroundStyle(Theme.muted)
     }
 }
+
+extension View {
+    /// With a mouse attached macOS switches to always-on scroll bars with a light track down the edge of every list.
+    /// This keeps overlay scroll bars (shown while scrolling, no track) regardless. Apply to the content inside a `ScrollView`.
+    func overlayScroller() -> some View { background(OverlayScroller()) }
+}
+
+private struct OverlayScroller: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class Probe: NSView {
+        private var watch: NSKeyValueObservation?
+
+        // The scroll view puts its style back to the system preference (mouse attached → legacy) on preference
+        // changes and relayouts, so watch the property and undo it every time.
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let scroll = enclosingScrollView else { return }
+            scroll.scrollerStyle = .overlay
+            watch = scroll.observe(\.scrollerStyle) { scroll, _ in
+                guard scroll.scrollerStyle != .overlay else { return }
+                DispatchQueue.main.async { scroll.scrollerStyle = .overlay }
+            }
+        }
+    }
+}

@@ -7,10 +7,12 @@ import MailCore
 /// changes nothing: the app shows the proposal and performs it after the user confirms.
 final class MCPServer {
     let library: MailLibrary
-    let modelReady: Task<Void, Never>
-    init(library: MailLibrary, modelReady: Task<Void, Never>) {
+    /// Loads this process's own model; started only when the app cannot answer a search.
+    let loadModel: () -> Task<Void, Never>
+    private lazy var modelReady = loadModel()
+    init(library: MailLibrary, loadModel: @escaping () -> Task<Void, Never>) {
         self.library = library
-        self.modelReady = modelReady
+        self.loadModel = loadModel
     }
 
     static let tools: [[String: Any]] = [
@@ -123,13 +125,14 @@ final class MCPServer {
         if Self.agentMode, Self.agentHidden.contains(name) { throw MailSourceError.other("unknown tool \(name)") }
         switch name {
         case "search_mail":
-            await modelReady.value
             let f = DateFormatter()
             f.dateFormat = "yyyy-MM-dd"
             let filter = SearchFilter(account: a["account"] as? String, sender: a["sender"] as? String,
                                       after: (a["after"] as? String).flatMap(f.date), before: (a["before"] as? String).flatMap(f.date))
-            let hits = try await library.search(a["query"] as? String ?? "", filter: filter, limit: a["limit"] as? Int ?? 20)
-            return encode(rows(hits))
+            let query = a["query"] as? String ?? "", limit = a["limit"] as? Int ?? 20
+            if let hits = SearchService.search(query, filter: filter, limit: limit) { return encode(rows(hits)) }
+            await modelReady.value
+            return encode(rows(try await library.search(query, filter: filter, limit: limit)))
         case "list_recent":
             let f = DateFormatter()
             f.dateFormat = "yyyy-MM-dd"
@@ -288,8 +291,8 @@ final class MCPServer {
     }
 
     func parseAction(_ v: Any?) throws -> MailAction {
-        guard let s = v as? String, let a = MailAction(rawValue: s) else {
-            throw MailSourceError.other("action must be one of \(MailAction.allCases.map(\.rawValue).joined(separator: ", "))")
+        guard let s = v as? String, let a = MailAction(rawValue: s), a != .deletePermanently else {
+            throw MailSourceError.other("action must be one of \(MailAction.allCases.filter { $0 != .deletePermanently }.map(\.rawValue).joined(separator: ", "))")
         }
         return a
     }

@@ -82,6 +82,36 @@ final class Searcher: @unchecked Sendable {
         return best.map { ids[$0.row] }
     }
 
+    /// Scores of every stored vector against each of `queries`: row-major [ids.count × queries.count].
+    func scores(_ queries: [[Float]]) throws -> (ids: [Int64], scores: [Float]) {
+        lock.lock()
+        defer { lock.unlock() }
+        try refresh()
+        let rows = ids.count, k = queries.count
+        guard rows > 0, let dim = queries.first?.count, matrix.count == rows * dim else { return ([], []) }
+        // [dim × k], so one multiply scores every message against every query.
+        var columns = [Float](repeating: 0, count: dim * k)
+        for (j, q) in queries.enumerated() { for t in 0..<dim { columns[t * k + j] = q[t] } }
+        var out = [Float](repeating: 0, count: rows * k)
+        vDSP_mmul(matrix, 1, columns, 1, &out, 1, vDSP_Length(rows), vDSP_Length(k), vDSP_Length(dim))
+        return (ids, out)
+    }
+
+    /// Normalized mean of the stored vectors of `members`.
+    func mean(_ members: [Int64]) throws -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        try refresh()
+        let wanted = Set(members)
+        let dim = ids.isEmpty ? 0 : matrix.count / ids.count
+        var sum = [Float](repeating: 0, count: dim)
+        for (row, id) in ids.enumerated() where wanted.contains(id) {
+            for t in 0..<dim { sum[t] += matrix[row * dim + t] }
+        }
+        let norm = sqrt(sum.reduce(0) { $0 + $1 * $1 })
+        return norm > 0 ? sum.map { $0 / norm } : sum
+    }
+
     /// Loads vectors added since the last call; reloads everything when some were deleted. Caller holds `lock`.
     private func refresh() throws {
         let state = try store.vectorState()

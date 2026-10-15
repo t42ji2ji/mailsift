@@ -12,6 +12,7 @@ struct StatusView: View {
                 index
                 connect
             }
+            .overlayScroller()
             .frame(maxWidth: 680, alignment: .leading)
             .padding(.horizontal, 28)
             .padding(.top, 44)
@@ -46,7 +47,9 @@ struct StatusView: View {
     private var connect: some View {
         VStack(alignment: .leading, spacing: 14) {
             Eyebrow("連接 AGENT · MCP")
-            CommandBlock(label: "Claude Code", brand: .claude, command: "claude mcp add mailsift -- \(CLIPath.quoted) mcp")
+            Text("在終端機貼上，之後任何資料夾的 Claude Code 或 Codex 都能搜尋、讀取你的信。執行它們的終端機需要「完全取用磁碟」權限；MailSift 開著時搜尋最快。")
+                .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
+            CommandBlock(label: "Claude Code", brand: .claude, command: "claude mcp add --scope user mailsift -- \(CLIPath.quoted) mcp")
             CommandBlock(label: "Codex", brand: .codex, command: "codex mcp add mailsift -- \(CLIPath.quoted) mcp")
             CommandBlock(label: "CLI", command: CLIPath.url.path)
         }

@@ -21,7 +21,7 @@ enum MailScript {
     /// The statement applied to one message reference `m` (an expression, not a variable).
     static func statement(_ action: MailAction, message m: String, target: MailboxSpec?) -> String {
         switch action {
-        case .trash: return "delete \(m)"
+        case .trash, .deletePermanently: return "delete \(m)"  // delete in Trash removes it for good
         case .archive, .restore: return "move \(m) to \(target?.reference ?? "missing value")"
         case .junk: return "set junk mail status of \(m) to true\n\t\t\tmove \(m) to \(target?.reference ?? "missing value")"
         case .markRead: return "set read status of \(m) to true"

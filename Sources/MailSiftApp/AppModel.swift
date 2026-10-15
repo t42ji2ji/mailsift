@@ -49,6 +49,7 @@ final class AppModel {
         do {
             let lib = try MailLibrary(source: source, embedder: nil, databaseURL: databaseURL)
             library = lib
+            SearchService.serve(lib)
             status = lib.status()
             readiness = .ready
             loadModel()
@@ -129,6 +130,8 @@ final class AppModel {
             }
             do {
                 try await lib.sync(progress: report)
+                // New mail is listable now; don't hold the lists until embedding finishes.
+                indexRevision += 1
                 // Polled rather than awaited so that a resync during the model download can cancel this run.
                 while case .loading = model { try await Task.sleep(for: .milliseconds(250)) }
                 guard case .loaded = model, let embedder = await modelTask?.value else { return }

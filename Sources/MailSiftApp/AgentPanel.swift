@@ -74,6 +74,7 @@ struct AgentPanel: View {
     @State private var composerHeight: CGFloat = 20
     /// Includes marked (composing) text, unlike `draft`.
     @State private var composerEmpty = true
+    @State private var showingHistory = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,14 +96,20 @@ struct AgentPanel: View {
         })
         .ignoresSafeArea(.container, edges: .top)
         .task { await model.resolveBackends() }
+        .onChange(of: model.prefill, initial: true) {
+            guard let text = model.prefill else { return }
+            draft = text
+            model.prefill = nil
+        }
     }
 
     private var header: some View {
         HStack(spacing: 4) {
-            Spacer()
             BackendPicker(model: model).padding(.trailing, 6)
             IconButton(symbol: "square.and.pencil", help: "新對話") { model.newConversation() }
                 .disabled(model.isEmpty)
+            history
+            Spacer()
             IconButton(symbol: "xmark", help: "關閉（⌘J）", action: close)
                 .keyboardShortcut("j", modifiers: .command)
         }
@@ -110,6 +117,30 @@ struct AgentPanel: View {
         .padding(.trailing, 12)
         .padding(.top, 38)
         .padding(.bottom, 10)
+    }
+
+    private var history: some View {
+        IconButton(symbol: "clock.arrow.circlepath", help: "過去的對話", active: showingHistory) { showingHistory.toggle() }
+            .disabled(model.conversations.isEmpty)
+            .popover(isPresented: $showingHistory, arrowEdge: .bottom) {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(model.conversations) { c in
+                            HistoryRow(conversation: c, current: c.id == model.conversationID) {
+                                model.open(c)
+                                showingHistory = false
+                            } delete: {
+                                model.delete(c)
+                                if model.conversations.isEmpty { showingHistory = false }
+                            }
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(width: 300)
+                .frame(maxHeight: 400)
+                .fixedSize(horizontal: false, vertical: true)
+            }
     }
 
     private var suggestions: some View {
@@ -127,15 +158,17 @@ struct AgentPanel: View {
 
     private var transcript: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
+            // Not lazy: a lazy stack pinned to the bottom blanks for a frame when a send grows it.
+            VStack(alignment: .leading, spacing: 12) {
                 let logos = logoItems
                 ForEach(model.items) { item in
                     AgentRow(item: item, model: model, logo: logos.contains(item.id), openMessage: openMessage)
                 }
                 if model.running, !showsProgress {
-                    ProgressView().controlSize(.small).padding(.leading, 2)
+                    ThinkingDots(size: 5).foregroundStyle(Theme.ink).padding(.leading, 2).padding(.vertical, 4)
                 }
             }
+            .overlayScroller()
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
         }
@@ -256,7 +289,7 @@ private struct AgentRow: View {
         case .tool(let label, let running, let failed):
             HStack(spacing: 6) {
                 if running {
-                    ProgressView().controlSize(.mini)
+                    ThinkingDots(size: 3)
                 } else {
                     Image(systemName: failed ? "exclamationmark.circle" : "checkmark").font(.system(size: 9, weight: .semibold))
                 }
@@ -402,7 +435,6 @@ private struct MailRow<Label: View>: View {
     let openMessage: (Int64) -> Void
     @ViewBuilder let label: Label
     @State private var hovering = false
-    @State private var confirmTrash = false
 
     var body: some View {
         let state = model.mailStates[id]
@@ -433,9 +465,6 @@ private struct MailRow<Label: View>: View {
         .onTapGesture { openMessage(id) }
         .onHover { hovering = $0 }
         .help("開啟這封信")
-        .confirmationDialog("將這封郵件移到垃圾桶？", isPresented: $confirmTrash) {
-            Button("移到垃圾桶", role: .destructive) { model.act(.trash, on: id) }
-        }
         .padding(.horizontal, -6)
     }
 
@@ -443,7 +472,7 @@ private struct MailRow<Label: View>: View {
         let flagged = model.refs[id]?.isFlagged ?? false
         return HStack(spacing: 0) {
             SmallAction(symbol: "archivebox", help: "封存") { model.act(.archive, on: id) }
-            SmallAction(symbol: "trash", help: "移到垃圾桶") { confirmTrash = true }
+            SmallAction(symbol: "trash", help: "移到垃圾桶") { model.act(.trash, on: id) }
             SmallAction(symbol: flagged ? "flag.fill" : "flag", help: flagged ? "移除旗標" : "加旗標") {
                 model.act(flagged ? .unflag : .flag, on: id)
             }
@@ -546,6 +575,52 @@ private struct DraftCard: View {
 }
 
 /// Two-way switch between the CLIs. A CLI that was not found stays visible but inert, with the reason on hover.
+/// Three dots brightening in turn: the assistant is working.
+private struct ThinkingDots: View {
+    var size: CGFloat
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: size * 0.8) {
+                ForEach(0..<3) { i in
+                    // Each dot peaks a third of a 1.2 s cycle after the previous one.
+                    let phase = (t / 1.2 - Double(i) / 3).truncatingRemainder(dividingBy: 1)
+                    Circle()
+                        .frame(width: size, height: size)
+                        .opacity(0.2 + 0.8 * max(0, cos(phase * 2 * .pi)))
+                }
+            }
+        }
+    }
+}
+
+private struct HistoryRow: View {
+    let conversation: AgentModel.Conversation
+    let current: Bool
+    let open: () -> Void
+    let delete: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(conversation.title).font(.system(size: 13, weight: current ? .semibold : .regular)).lineLimit(1)
+                Text("\(Fmt.short(conversation.updated)) · \(conversation.backend.title)")
+                    .font(.system(size: 11)).foregroundStyle(Theme.muted)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: open)
+            SmallAction(symbol: "trash", help: "刪除這段對話", action: delete)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(hovering ? Theme.hover : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .onHover { hovering = $0 }
+    }
+}
+
 private struct BackendPicker: View {
     let model: AgentModel
 
@@ -625,6 +700,7 @@ enum AgentText {
         case .unflag: "移除旗標"
         case .restore: "還原"
         case .junk: "標為垃圾郵件"
+        case .deletePermanently: "永久刪除"
         }
     }
 

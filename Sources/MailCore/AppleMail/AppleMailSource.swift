@@ -101,7 +101,7 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
 
     /// Messages in Trash or Spam; other roles return [] (the library derives inbox/archive from `inInbox`).
     public func listMailbox(_ role: MailboxRole) throws -> [MessageMeta] {
-        guard role == .trash || role == .spam else { return [] }
+        guard role == .trash || role == .spam || role == .drafts else { return [] }
         return try list { $0.role == role }
     }
 
@@ -185,6 +185,12 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         }
     }
 
+    public func accounts() throws -> [String] {
+        let emails = AppleAccounts.emailsByUUID(accountsDB: accountsDB)
+        let uuids = Set(try mailboxes(try openIndex()).values.filter { $0.scheme != "local" }.map(\.accountUUID))
+        return Array(Set(uuids.compactMap { emails[$0] })).sorted()
+    }
+
     public func correspondents() throws -> Set<String> {
         let mine = Set(AppleAccounts.emailsByUUID(accountsDB: accountsDB).values)
         guard !mine.isEmpty else { return [] }
@@ -210,7 +216,8 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         if m.subject.isEmpty { m.subject = parsed.subject }
         if m.senderAddress.isEmpty, let f = parsed.from { m.senderAddress = f.address.lowercased(); m.senderName = f.name }
         return ParsedMessage(meta: m, to: parsed.to.map(Self.format), cc: parsed.cc.map(Self.format),
-                             bodyText: parsed.bodyText, html: parsed.html, attachments: parsed.attachments)
+                             bodyText: parsed.bodyText, html: parsed.html, attachments: parsed.attachments,
+                             unsubscribe: parsed.unsubscribe)
     }
 
     /// Mail's own saved copy when it has one; otherwise the part decoded from the .emlx into
@@ -272,6 +279,7 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         var bodyText: String
         var html: String?
         var attachments: [Attachment]
+        var unsubscribe: Unsubscribe?
     }
 
     /// Parses one .emlx file. Returns nil when the file is gone.
@@ -290,7 +298,8 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
             to: MIME.parseAddresses(root.header("to") ?? ""),
             cc: MIME.parseAddresses(root.header("cc") ?? ""),
             bodyText: body.text, html: body.html,
-            attachments: MailAttachments.list(root, attachmentsDir: id.map { MailAttachments.attachmentsDir(forEmlx: path, id: $0) }))
+            attachments: MailAttachments.list(root, attachmentsDir: id.map { MailAttachments.attachmentsDir(forEmlx: path, id: $0) }),
+            unsubscribe: Unsubscribe(header: root.header("list-unsubscribe"), post: root.header("list-unsubscribe-post")))
     }
 
     // MARK: Actions
@@ -400,6 +409,9 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
                     failed[id] = "This account has no Spam mailbox."; continue
                 }
                 add(id, spec(mb), spec(spam))
+            case .deletePermanently:
+                guard mb.role == .trash else { failed[id] = "Only mail in Trash can be deleted permanently."; continue }
+                add(id, spec(mb), nil)
             case .markRead, .markUnread, .flag, .unflag:
                 add(id, spec(mb), nil)
             }

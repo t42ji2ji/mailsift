@@ -1,12 +1,11 @@
 #!/bin/zsh
 # Builds build/MailSift.app (app + bundled CLI).
-#   ./build.sh             ad-hoc signed (dev; TCC prompts work)
+#   ./build.sh             Developer ID signed, no hardened runtime (dev)
 #   RELEASE=1 ./build.sh   Developer ID, hardened runtime, timestamp
 set -euo pipefail
 cd "${0:A:h}"
 
 IDENTITY=40EE56946432E9A272F0B129ED83D5E843B5EAE8
-DEV_IDENTITY=240813A71E965C988CFFE2FDF5F6663FF78A0E89   # Apple Development
 ENTITLEMENTS=Resources/MailSift.entitlements
 APP=build/MailSift.app
 
@@ -30,10 +29,10 @@ if [[ "${RELEASE:-0}" == 1 ]]; then
   codesign "${SIGN[@]}" --identifier app.dorara.mailsift.cli "$APP/Contents/Helpers/mailsift"
   codesign "${SIGN[@]}" "$APP"
 else
-  # A stable identity (not ad-hoc) keeps Full Disk Access and Automation grants across rebuilds:
-  # TCC pins ad-hoc apps to their cdhash, which changes on every build.
-  codesign --force -s "$DEV_IDENTITY" --identifier app.dorara.mailsift.cli "$APP/Contents/Helpers/mailsift"
-  codesign --force -s "$DEV_IDENTITY" "$APP"
+  # Same certificate as release: TCC matches grants by designated requirement, so dev builds and the
+  # installed release share one Full Disk Access / Automation grant (ad-hoc would pin to the cdhash).
+  codesign --force -s "$IDENTITY" --identifier app.dorara.mailsift.cli "$APP/Contents/Helpers/mailsift"
+  codesign --force -s "$IDENTITY" "$APP"
 fi
 
 codesign --verify --deep --strict "$APP"

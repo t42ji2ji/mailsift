@@ -23,9 +23,9 @@ public final class MailLibrary: @unchecked Sendable {
 
     public let source: MailSource
     let store: IndexStore
-    private let searcher: Searcher
+    let searcher: Searcher
     private let lock = NSLock()
-    private var embedder: TextEmbedder?
+    var embedder: TextEmbedder?
     private var current: IndexStatus
     private var indexing = false
 
@@ -49,6 +49,8 @@ public final class MailLibrary: @unchecked Sendable {
 
     /// The embedding model may finish loading after the library is created.
     public func setEmbedder(_ embedder: TextEmbedder?) { locked { self.embedder = embedder } }
+
+    public var canSearchByMeaning: Bool { locked { embedder != nil } }
 
     // MARK: - Indexing
 
@@ -133,6 +135,12 @@ public final class MailLibrary: @unchecked Sendable {
             try store.setVectors(zip(docs, vectors).map { (id: $0.id, vector: $1) })
             try refreshCounts(progress)
         }
+        // Also relabel when there are no labels yet or the categories changed since they were made.
+        let signature = categorySignature()
+        if try !pending.isEmpty || store.categoryIDs().isEmpty || store.setting("categorySignature") != signature {
+            try store.setCategories(try await categorize())
+            try store.setSetting("categorySignature", signature)
+        }
     }
 
     private func refreshCounts(_ progress: Progress?, _ change: (inout IndexStatus) -> Void = { _ in }) throws {
@@ -159,8 +167,10 @@ public final class MailLibrary: @unchecked Sendable {
     }
 
     /// Newest messages, for browsing before any query.
-    public func recent(_ box: BrowseBox = .inbox, limit: Int = 400, offset: Int = 0, excludingFlagged: Bool = false) -> [SearchHit] {
-        ((try? store.recent(box, limit: limit, offset: offset, excludingFlagged: excludingFlagged)) ?? []).map {
+    public func recent(_ box: BrowseBox = .inbox, limit: Int = 400, offset: Int = 0, excludingFlagged: Bool = false, isRead: Bool? = nil,
+                       accounts: [String]? = nil, category: String? = nil) -> [SearchHit] {
+        ((try? store.recent(box, limit: limit, offset: offset, excludingFlagged: excludingFlagged, isRead: isRead,
+                            accounts: accounts, category: category)) ?? []).map {
             SearchHit(meta: $0.meta, snippet: Searcher.snippet($0.body, terms: []), score: 0, match: .keyword)
         }
     }
@@ -190,6 +200,15 @@ public final class MailLibrary: @unchecked Sendable {
         guard let row = try store.metaAndBody([id])[id] else { throw MailLibraryError.notIndexed(id) }
         if let parsed = try? source.parse(row.meta) { return parsed }
         return ParsedMessage(meta: row.meta, to: [], cc: [], bodyText: row.body, html: nil)
+    }
+
+    /// Accounts with indexed mail, most mail first.
+    public func accounts() -> [String] { (try? store.accountList()) ?? [] }
+
+    /// Accounts set up in the mail client with no indexed mail yet: the client is still downloading them.
+    public func syncingAccounts() -> [String] {
+        let indexed = Set(accounts())
+        return ((try? source.accounts()) ?? []).filter { !indexed.contains($0) }
     }
 
     /// Senders by message count (address compared case-insensitively, per account), optionally only since `after`.
@@ -253,11 +272,12 @@ public final class MailLibrary: @unchecked Sendable {
         case .flag: try store.setFlags(done, isFlagged: true)
         case .unflag: try store.setFlags(done, isFlagged: false)
         case .restore: break  // restored mail is picked up by the next sync
+        case .deletePermanently: break  // Trash isn't indexed
         }
         return result
     }
 
-    private func locked<T>(_ body: () throws -> T) rethrows -> T {
+    func locked<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
         defer { lock.unlock() }
         return try body()

@@ -196,6 +196,7 @@ private struct TrashConfirmSheet: View {
                         Rectangle().fill(Theme.hairline).frame(height: 1)
                     }
                 }
+                .overlayScroller()
             }
             .frame(minHeight: 120, maxHeight: 320)
             .hairlineBorder()

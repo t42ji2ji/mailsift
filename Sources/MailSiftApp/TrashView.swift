@@ -11,7 +11,7 @@ final class TrashModel {
     private(set) var restoring: Int?
     var result: String?
 
-    /// .trash or .spam: unindexed mailboxes read straight from Mail.
+    /// .trash, .spam or .drafts: unindexed mailboxes read straight from Mail.
     let role: MailboxRole
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var previewTask: Task<Void, Never>?
@@ -21,7 +21,7 @@ final class TrashModel {
         self.role = role
     }
 
-    var title: String { role == .spam ? "垃圾郵件" : "垃圾桶" }
+    var title: String { role == .spam ? "垃圾郵件" : role == .drafts ? "草稿" : "垃圾桶" }
     /// Both move the mail back to the inbox.
     var restoreLabel: String { role == .spam ? "不是垃圾郵件" : "還原" }
 
@@ -67,10 +67,30 @@ final class TrashModel {
             app.resync()  // restored mail returns to the index
         }
     }
+
+    /// Trash only: deletes the selection for good.
+    func deletePermanently() {
+        guard let lib = app.library, !selection.isEmpty else { return }
+        let ids = Array(selection)
+        restoring = ids.count
+        result = nil
+        Task {
+            do {
+                let r = try await lib.perform(.deletePermanently, ids: ids)
+                result = "已永久刪除 \(Fmt.count(r.succeeded.count)) 封" + (r.failed.isEmpty ? "" : " · 失敗 \(Fmt.count(r.failed.count)) 封")
+            } catch {
+                result = SearchModel.describe(error)
+            }
+            restoring = nil
+            selection = []
+            reload()
+        }
+    }
 }
 
 struct TrashView: View {
     @Bindable var model: TrashModel
+    @State private var confirmingDelete = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -95,22 +115,36 @@ struct TrashView: View {
                 Text(model.title).font(.system(size: 26, weight: .semibold)).tracking(-0.4)
                 Text(Fmt.count(model.items.count)).font(.system(size: 13).monospacedDigit()).foregroundStyle(Theme.muted)
             }
-            HStack(spacing: 10) {
-                Button(model.selection.isEmpty ? model.restoreLabel : "\(model.restoreLabel) · \(Fmt.count(model.selection.count)) 封") { model.restore() }
-                    .buttonStyle(InkButtonStyle())
-                    .disabled(model.selection.isEmpty || model.restoring != nil)
-                if model.restoring != nil { ProgressView().controlSize(.mini) }
-                if let r = model.result { Text(r).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(2) }
-            }
+            if model.role != .drafts { actions }
         }
         .padding(.horizontal, 22)
         .padding(.top, 44)
+        .confirmationDialog("永久刪除 \(Fmt.count(model.selection.count)) 封郵件？", isPresented: $confirmingDelete) {
+            Button("永久刪除", role: .destructive) { model.deletePermanently() }
+        } message: {
+            Text("刪除後無法復原。")
+        }
         .padding(.bottom, 12)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 10) {
+            Button(model.selection.isEmpty ? model.restoreLabel : "\(model.restoreLabel) · \(Fmt.count(model.selection.count)) 封") { model.restore() }
+                .buttonStyle(InkButtonStyle())
+                .disabled(model.selection.isEmpty || model.restoring != nil)
+            if model.role == .trash {
+                Button("永久刪除") { confirmingDelete = true }
+                    .buttonStyle(LineButtonStyle())
+                    .disabled(model.selection.isEmpty || model.restoring != nil)
+            }
+            if model.restoring != nil { ProgressView().controlSize(.mini) }
+            if let r = model.result { Text(r).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(2) }
+        }
     }
 
     @ViewBuilder private var list: some View {
         if model.items.isEmpty {
-            Message(symbol: model.role == .spam ? "xmark.bin" : "trash", text: model.loading ? "讀取中" : "\(model.title)是空的")
+            Message(symbol: model.role == .spam ? "xmark.bin" : model.role == .drafts ? "doc.text" : "trash", text: model.loading ? "讀取中" : "\(model.title)是空的")
         } else {
             List(model.items, selection: $model.selection) { meta in
                 VStack(alignment: .leading, spacing: 3) {
@@ -139,6 +173,7 @@ struct TrashView: View {
                     Rectangle().fill(Theme.hairline).frame(height: 1)
                     Text(Linkify.attributed(m.bodyText)).font(.system(size: 14)).lineSpacing(5).textSelection(.enabled)
                 }
+                .overlayScroller()
                 .frame(maxWidth: 680, alignment: .leading)
                 .padding(.horizontal, 36)
                 .padding(.top, 44)

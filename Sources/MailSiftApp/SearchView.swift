@@ -14,6 +14,7 @@ struct SearchView: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     searchBar
+                    if model.query.isEmpty, !model.categoryCounts.isEmpty { categoryBar }
                     results
                         .animation(.easeInOut(duration: 0.22), value: model.box)
                 }
@@ -44,7 +45,7 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.muted)
             IMESearchField(prompt: "用一句話描述你要找的信", clearToken: clearToken, onEdit: { hasText = $0 }) { model.submit($0) }
                 .frame(height: 22)
-            if model.searching { ProgressView().controlSize(.mini) }
+            if model.searching || model.pendingLoads > 0 || app.status.phase == .syncing { ProgressView().controlSize(.mini) }
             if hasText {
                 Button { clearToken += 1 } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(Theme.faint)
@@ -76,6 +77,7 @@ struct SearchView: View {
             // Inbox is the bottom layer and never leaves; other boxes slide in over it and back out.
             ZStack {
                 HitList(model: model, sections: inboxSections, showMatch: false, active: model.box == .inbox)
+                    .animation(.easeInOut(duration: 0.25), value: model.unread.map(\.id))
                 if model.box != .inbox {
                     VStack(spacing: 0) {
                         backRow
@@ -94,11 +96,16 @@ struct SearchView: View {
         }
     }
 
+    /// Topic chips over the list; picking one narrows every box to it, picking it again shows all.
+    private var categoryBar: some View {
+        CategoryBar(model: model).padding(.bottom, 6)
+    }
+
     private var backRow: some View {
         Button { model.box = .inbox } label: {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
-                Text(model.box == .flagged ? "旗標" : "封存").font(.system(size: 13, weight: .semibold))
+                Text(model.box == .flagged ? "旗標" : model.box == .sent ? "寄件備份" : "封存").font(.system(size: 13, weight: .semibold))
                 Spacer()
             }
             .padding(.horizontal, 18)
@@ -109,10 +116,86 @@ struct SearchView: View {
         .help("回到 Inbox（Esc）")
     }
 
-    /// Flagged mail pinned on top, showing its first rows, then the rest of the inbox by date.
+    /// Unread mail on top, then flagged mail pinned (its first rows), then the rest of the inbox by date.
     private var inboxSections: [DateSection] {
+        let unread = model.unread.isEmpty ? [] : [DateSection(title: "未讀", hits: model.unread)]
         let pinned = model.pinned.isEmpty ? [] : [DateSection(title: "旗標", hits: model.pinned, truncated: true)]
-        return pinned + DateSection.group(model.rows[.inbox, default: []])
+        return unread + pinned + DateSection.group(model.feed)
+    }
+}
+
+/// Scrolls sideways by dragging with the mouse as well as by trackpad, with no scroll bar.
+private struct CategoryBar: View {
+    let model: SearchModel
+    @State private var position = ScrollPosition()
+    @State private var offset: CGFloat = 0
+    @State private var maxOffset: CGFloat = 0
+    @State private var dragStart: CGFloat?
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                CategoryChip(name: "全部", count: nil, selected: model.category == nil) { pick(nil) }
+                ForEach(model.categories.filter { !$0.hidden && (model.categoryCounts[$0.id, default: 0] > 0 || model.category == $0.id) }) { c in
+                    CategoryChip(name: c.name, count: model.categoryCounts[c.id, default: 0], selected: model.category == c.id) {
+                        pick(model.category == c.id ? nil : c.id)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+        }
+        .scrollPosition($position)
+        .onScrollGeometryChange(for: [CGFloat].self) { g in
+            [g.contentOffset.x, max(0, g.contentSize.width - g.containerSize.width)]
+        } action: { _, v in
+            offset = v[0]
+            maxOffset = v[1]
+        }
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { drag in
+                    let start = dragStart ?? offset
+                    dragStart = start
+                    position.scrollTo(x: min(max(start - drag.translation.width, 0), maxOffset))
+                }
+                .onEnded { drag in
+                    // Coasts on to where the release velocity would carry it.
+                    let target = (dragStart ?? offset) - drag.predictedEndTranslation.width
+                    withAnimation(.easeOut(duration: 0.5)) { position.scrollTo(x: min(max(target, 0), maxOffset)) }
+                    // Cleared after the release, so a drag ending on a chip does not also pick it.
+                    DispatchQueue.main.async { dragStart = nil }
+                }
+        )
+    }
+
+    private func pick(_ category: String?) {
+        guard dragStart == nil else { return }
+        model.category = category
+    }
+}
+
+private struct CategoryChip: View {
+    let name: String
+    let count: Int?
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(name).font(.system(size: 12, weight: .medium))
+                if let count {
+                    Text(Fmt.count(count)).font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(selected ? Theme.paper.opacity(0.7) : Theme.faint)
+                }
+            }
+            .foregroundStyle(selected ? Theme.paper : Theme.ink)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(selected ? Theme.ink : Theme.fill, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -152,7 +235,7 @@ private struct HitList: View {
     let showMatch: Bool
     /// False while covered by another box: it keeps its place but takes no focus or keys.
     var active = true
-    var preview = 5
+    var preview = 3
     @FocusState private var focused: Bool
 
     private func visible(_ section: DateSection) -> [SearchHit] {
@@ -177,6 +260,7 @@ private struct HitList: View {
                     }
                     if !showMatch { Color.clear.frame(height: 1).onAppear { model.loadMore() } }
                 }
+                .overlayScroller()
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
             }
@@ -186,11 +270,6 @@ private struct HitList: View {
             .onKeyPress(.downArrow) { move(1, proxy) }
             .onKeyPress(.upArrow) { move(-1, proxy) }
             .onKeyPress(characters: .init(charactersIn: "jkesu#rRf")) { press in shortcut(press, proxy) }
-            .onKeyPress(.escape) {
-                guard model.box != .inbox else { return .ignored }
-                model.box = .inbox
-                return .handled
-            }
         }
     }
 

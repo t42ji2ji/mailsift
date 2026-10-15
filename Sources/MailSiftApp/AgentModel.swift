@@ -99,12 +99,13 @@ final class AgentModel {
         self.app = app
         self.search = search
         backend = UserDefaults.standard.string(forKey: Self.backendKey).flatMap(AgentBackend.init(rawValue:)) ?? .claude
+        conversations = Self.loadConversations()
         restore()
     }
 
-    // MARK: - Saved conversation
+    // MARK: - Saved conversations
 
-    /// The current conversation, so it survives quitting the app.
+    /// One conversation per file, so it survives quitting the app and stays in the history.
     private struct Saved: Codable {
         var backend: AgentBackend
         var sessionID: String?
@@ -112,11 +113,79 @@ final class AgentModel {
         var refs: [Int64: MailRef]
     }
 
-    static let savedURL = workDir.appendingPathComponent("conversation.json")
+    /// A past conversation in the history list.
+    struct Conversation: Identifiable {
+        let id: UUID
+        var backend: AgentBackend
+        var title: String
+        var updated: Date
+    }
+
+    /// Newest first.
+    private(set) var conversations: [Conversation] = []
+    private(set) var conversationID = UUID()
+
+    static let conversationsDir = workDir.appendingPathComponent("conversations")
+    static let currentKey = "agentConversation"
+    /// The single conversation file of earlier versions, moved into the history on first launch.
+    static let legacyURL = workDir.appendingPathComponent("conversation.json")
+
+    static func url(_ id: UUID) -> URL { conversationsDir.appendingPathComponent("\(id.uuidString).json") }
+
+    private static func read(_ id: UUID) -> Saved? {
+        (try? Data(contentsOf: url(id))).flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
+    }
+
+    private static func summary(_ id: UUID, _ saved: Saved, updated: Date) -> Conversation? {
+        guard let first = saved.items.lazy.compactMap({ if case .user(let t) = $0.kind { t } else { nil } }).first else { return nil }
+        return Conversation(id: id, backend: saved.backend, title: plain(first, refs: saved.refs), updated: updated)
+    }
+
+    private static func loadConversations() -> [Conversation] {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: legacyURL.path) {
+            let id = UUID()
+            try? fm.createDirectory(at: conversationsDir, withIntermediateDirectories: true)
+            if (try? fm.moveItem(at: legacyURL, to: url(id))) != nil {
+                UserDefaults.standard.set(id.uuidString, forKey: currentKey)
+            }
+        }
+        let files = (try? fm.contentsOfDirectory(at: conversationsDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        return files.compactMap { file -> Conversation? in
+            guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent), let saved = read(id) else { return nil }
+            let updated = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return summary(id, saved, updated: updated)
+        }
+        .sorted { $0.updated > $1.updated }
+    }
 
     private func restore() {
-        guard let data = try? Data(contentsOf: Self.savedURL),
-              let saved = try? JSONDecoder().decode(Saved.self, from: data), saved.backend == backend else { return }
+        guard let id = UserDefaults.standard.string(forKey: Self.currentKey).flatMap(UUID.init(uuidString:)),
+              let saved = Self.read(id), saved.backend == backend else { return }
+        load(id, saved)
+    }
+
+    /// Continues a past conversation, switching to the CLI it was held with.
+    func open(_ conversation: Conversation) {
+        guard conversation.id != conversationID, let saved = Self.read(conversation.id) else { return }
+        cancel()
+        streamed = []
+        outcomes = []
+        mailStates = [:]
+        backend = saved.backend
+        UserDefaults.standard.set(backend.rawValue, forKey: Self.backendKey)
+        load(conversation.id, saved)
+    }
+
+    func delete(_ conversation: Conversation) {
+        try? FileManager.default.removeItem(at: Self.url(conversation.id))
+        conversations.removeAll { $0.id == conversation.id }
+        if conversation.id == conversationID { newConversation() }
+    }
+
+    private func load(_ id: UUID, _ saved: Saved) {
+        conversationID = id
+        UserDefaults.standard.set(id.uuidString, forKey: Self.currentKey)
         sessionID = saved.sessionID
         refs = saved.refs
         // A quit mid-action leaves nothing running.
@@ -134,14 +203,13 @@ final class AgentModel {
     }
 
     private func save() {
-        guard !items.isEmpty else {
-            try? FileManager.default.removeItem(at: Self.savedURL)
-            return
-        }
+        guard !items.isEmpty else { return }
         let saved = Saved(backend: backend, sessionID: sessionID, items: items, refs: refs)
         guard let data = try? JSONEncoder().encode(saved) else { return }
-        try? FileManager.default.createDirectory(at: Self.workDir, withIntermediateDirectories: true)
-        try? data.write(to: Self.savedURL, options: .atomic)
+        try? FileManager.default.createDirectory(at: Self.conversationsDir, withIntermediateDirectories: true)
+        try? data.write(to: Self.url(conversationID), options: .atomic)
+        conversations.removeAll { $0.id == conversationID }
+        if let c = Self.summary(conversationID, saved, updated: .now) { conversations.insert(c, at: 0) }
     }
 
     /// Switching starts a new conversation: sessions do not carry over between CLIs.
@@ -154,20 +222,24 @@ final class AgentModel {
 
     var isEmpty: Bool { items.isEmpty }
 
-    /// Opens the drawer and asks for a reply draft to `id` (the open message is in the context).
+    /// Text for the composer, taken by the panel; the user edits and sends it.
+    var prefill: String?
+
+    /// Opens the drawer with a reply-draft request for `id` in the composer, not yet sent.
     func requestDraft(_ id: Int64) {
         isOpen = true
-        guard !running else { return }
-        send("幫我擬 [[\(id)]] 的回覆")
+        prefill = "幫我擬 [[\(id)]] 的回覆"
     }
 
+    /// Starts an empty conversation; the current one stays in the history.
     func newConversation() {
         cancel()
         items = []
         sessionID = nil
         streamed = []
         outcomes = []
-        save()
+        conversationID = UUID()
+        UserDefaults.standard.set(conversationID.uuidString, forKey: Self.currentKey)
     }
 
     func cancel() {
@@ -448,7 +520,7 @@ final class AgentModel {
             return
         }
         if name == "propose_action" {
-            guard let action = (input["action"] as? String).flatMap(MailAction.init(rawValue:)) else { return }
+            guard let action = (input["action"] as? String).flatMap(MailAction.init(rawValue:)), action != .deletePermanently else { return }
             var seen = Set<Int64>(), notes: [Int64: String] = [:], unchecked = Set<Int64>()
             var ids = (input["ids"] as? [NSNumber] ?? []).map(\.int64Value)
             for item in input["items"] as? [[String: Any]] ?? [] {
@@ -567,7 +639,7 @@ final class AgentModel {
             case .restore: mailStates[id, default: .init()].removed = nil
             case .flag: refs[id]?.isFlagged = true
             case .unflag: refs[id]?.isFlagged = false
-            case .markRead, .markUnread: break
+            case .markRead, .markUnread, .deletePermanently: break
             }
         }
     }
@@ -688,7 +760,9 @@ final class AgentModel {
     }
 
     /// Text with `[[id]]` replaced by the sender/subject label, for plain views (the user's bubble).
-    func plain(_ text: String) -> String {
+    func plain(_ text: String) -> String { Self.plain(text, refs: refs) }
+
+    static func plain(_ text: String, refs: [Int64: MailRef]) -> String {
         text.replacing(AgentStream.refPattern) { match in
             let id = Int64(match.1) ?? 0
             return refs[id].map { $0.subject.isEmpty ? $0.sender : $0.subject } ?? "#\(id)"

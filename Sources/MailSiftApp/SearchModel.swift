@@ -7,21 +7,38 @@ final class SearchModel {
     private(set) var query = ""
     private(set) var hits: [SearchHit] = []
     /// Newest mail per mailbox while the query is empty, paged in as the list scrolls.
-    /// Inbox leaves out flagged mail: that is pinned above it, from `rows[.flagged]`.
+    /// Inbox holds only read, unflagged mail: unread and flagged mail sit above it.
     private(set) var rows: [BrowseBox: [SearchHit]] = [:]
+    /// All unread inbox mail, on top. A message read while open stays until another one is selected.
+    private(set) var unread: [SearchHit] = []
+    /// Inbox under the unread section: flagged mail pinned, then the rest. Each message appears once.
+    var pinned: [SearchHit] { leavingOutUnread(rows[.flagged, default: []]) }
+    var feed: [SearchHit] { leavingOutUnread(rows[.inbox, default: []]) }
     /// What the open box shows, top to bottom.
-    var recent: [SearchHit] { box == .inbox ? pinned + rows[.inbox, default: []] : rows[box, default: []] }
-    var pinned: [SearchHit] { rows[.flagged, default: []] }
+    var recent: [SearchHit] { box == .inbox ? unread + pinned + feed : rows[box, default: []] }
+
+    private func leavingOutUnread(_ hits: [SearchHit]) -> [SearchHit] {
+        let ids = Set(unread.map(\.id))
+        return hits.filter { !ids.contains($0.id) }
+    }
     private(set) var searching = false
+    /// Reads of list rows still in flight.
+    private(set) var pendingLoads = 0
     private(set) var searchError: String?
 
     var selection: Int64? {
-        didSet { if selection != oldValue { loadSelected() } }
+        didSet {
+            guard selection != oldValue else { return }
+            settle(oldValue)
+            loadSelected()
+        }
     }
     private(set) var message: ParsedMessage?
     /// The message HTML with `cid:` images inlined as data URIs (nil until resolved or when there is no HTML).
     private(set) var html: String?
     private(set) var loadingMessage = false
+    /// The open message's conversation, oldest first; empty or one message when it stands alone.
+    private(set) var thread: [ParsedMessage] = []
     private(set) var actionRunning = false
     var actionError: String?
 
@@ -36,6 +53,26 @@ final class SearchModel {
 
     init(app: AppModel) { self.app = app }
 
+    /// Accounts with indexed mail, most mail first.
+    private(set) var accounts: [String] = []
+    /// Accounts the mail client has but whose mail isn't here yet.
+    private(set) var syncingAccounts: [String] = []
+    /// Accounts left out of every box and search. Saved as hidden, so a newly added account shows up.
+    var hiddenAccounts = Set(UserDefaults.standard.stringArray(forKey: "hiddenAccounts") ?? []) {
+        didSet {
+            UserDefaults.standard.set(Array(hiddenAccounts), forKey: "hiddenAccounts")
+            rows = [:]
+            exhausted = []
+            loadRecent()
+            submit(query)
+        }
+    }
+    /// The accounts to show, or nil for all.
+    private var shownAccounts: [String]? {
+        let hidden = hiddenAccounts.intersection(accounts)
+        return hidden.isEmpty ? nil : accounts.filter { !hidden.contains($0) }
+    }
+
     var library: MailLibrary? { app.library }
 
     /// Which mailbox the list browses while the query is empty.
@@ -44,21 +81,81 @@ final class SearchModel {
             guard box != oldValue else { return }
             selections[oldValue] = selection
             selection = selections[box]
-            if rows[box] == nil { loadRecent() }
+            if rows[box] == nil { loadRecent() } else { loadCounts() }
         }
     }
 
-    /// Reloads Inbox, the pinned flagged mail and the open box, keeping as many rows as each already has.
+    /// Topic the boxes are narrowed to; nil is every topic.
+    var category: String? {
+        didSet {
+            guard category != oldValue else { return }
+            rows = [:]
+            exhausted = []
+            loadRecent()
+        }
+    }
+    /// Messages per category id in the open box.
+    private(set) var categoryCounts: [String: Int] = [:]
+    /// Every category in display order, hidden ones included.
+    private(set) var categories: [MailCategory] = []
+
+    /// Saves categories edited in Settings; a hidden category stops narrowing the list.
+    func saveCategories(_ edited: [MailCategory]) {
+        guard let lib = app.library else { return }
+        let relabel = edited.filter { !$0.description.isEmpty }.map { [$0.id, $0.description] }
+            != categories.filter { !$0.description.isEmpty }.map { [$0.id, $0.description] }
+        try? lib.saveCategories(edited)
+        categories = lib.categories()
+        if let category, categories.first(where: { $0.id == category })?.hidden != false { self.category = nil }
+        if relabel { app.resync() }
+    }
+
+    /// Reloads unread mail, Inbox, the pinned flagged mail and the open box, keeping as many rows as each already has.
     func loadRecent() {
         guard let lib = app.library else { return }
+        accounts = lib.accounts()
+        syncingAccounts = lib.syncingAccounts()
+        let only = shownAccounts
+        let category = category
+        loadCounts()
+        pendingLoads += 1
+        Task {
+            defer { pendingLoads -= 1 }
+            var fresh = await Task.detached { lib.recent(.inbox, limit: -1, isRead: false, accounts: only, category: category) }.value
+            guard category == self.category else { return }
+            // The open message was unread when opened: it stays put until another is selected.
+            if let id = selection, let open = unread.first(where: { $0.id == id }), !fresh.contains(where: { $0.id == id }) {
+                fresh.append(open)
+                fresh.sort { $0.meta.date > $1.meta.date }
+            }
+            unread = fresh
+        }
         for box in Set([.inbox, .flagged, box]) {
             // Flagged mail loads whole (a negative LIMIT is none in SQLite): the pinned section counts it.
             let limit = box == .flagged ? -1 : max(rows[box]?.count ?? 0, Self.page)
+            pendingLoads += 1
             Task {
-                let fresh = await Task.detached { lib.recent(box, limit: limit, excludingFlagged: box == .inbox) }.value
+                defer { pendingLoads -= 1 }
+                let fresh = await Task.detached {
+                    lib.recent(box, limit: limit, excludingFlagged: box == .inbox, isRead: box == .inbox ? true : nil, accounts: only,
+                               category: category)
+                }.value
+                guard category == self.category else { return }
                 rows[box] = fresh
                 if box == .flagged || fresh.count < limit { exhausted.insert(box) } else { exhausted.remove(box) }
             }
+        }
+    }
+
+    private func loadCounts() {
+        guard let lib = app.library else { return }
+        categories = lib.categories()
+        let box = box
+        let only = shownAccounts
+        Task {
+            let counts = await Task.detached { lib.categoryCounts(box, accounts: only) }.value
+            guard box == self.box else { return }
+            categoryCounts = counts
         }
     }
 
@@ -68,13 +165,28 @@ final class SearchModel {
         guard let lib = app.library, let loaded = rows[box]?.count, !exhausted.contains(box), !paging.contains(box) else { return }
         paging.insert(box)
         let page = Self.page
+        let only = shownAccounts
+        let category = category
+        pendingLoads += 1
         Task {
-            let next = await Task.detached { lib.recent(box, limit: page, offset: loaded, excludingFlagged: box == .inbox) }.value
+            defer { pendingLoads -= 1 }
+            let next = await Task.detached {
+                lib.recent(box, limit: page, offset: loaded, excludingFlagged: box == .inbox, isRead: box == .inbox ? true : nil, accounts: only,
+                           category: category)
+            }.value
             paging.remove(box)
+            guard category == self.category else { return }
             if next.count < page { exhausted.insert(box) }
             let seen = Set(rows[box, default: []].map(\.id))
             rows[box, default: []] += next.filter { !seen.contains($0.id) }
         }
+    }
+
+    /// A message read while open leaves the unread section once another one is selected, and drops into its place below.
+    private func settle(_ id: Int64?) {
+        guard let id, let i = unread.firstIndex(where: { $0.id == id }), unread[i].meta.isRead else { return }
+        unread.remove(at: i)
+        loadRecent()
     }
 
     /// Called by the search field with committed (non-composing) text only.
@@ -89,9 +201,10 @@ final class SearchModel {
             return
         }
         searching = true
+        let filter = SearchFilter(accounts: shownAccounts)
         searchTask = Task {
             do {
-                let result = try await lib.search(text, limit: 100)
+                let result = try await lib.search(text, filter: filter, limit: 100)
                 guard !Task.isCancelled, text == query else { return }
                 hits = result
             } catch {
@@ -107,6 +220,7 @@ final class SearchModel {
         messageTask?.cancel()
         message = nil
         html = nil
+        thread = []
         actionError = nil
         guard let id = selection, let lib = app.library else { return }
         loadingMessage = true
@@ -118,6 +232,10 @@ final class SearchModel {
             case .success(let m):
                 message = m
                 html = m.html
+                Task {
+                    let conversation = await Task.detached { (try? lib.thread(id)) ?? [] }.value
+                    if selection == id { thread = conversation }
+                }
                 if m.html != nil, m.attachments.contains(where: { $0.contentID != nil && $0.isDownloaded }) {
                     let resolved = await Task.detached { Self.inlineImages(m, lib) }.value
                     if selection == id { html = resolved }
@@ -167,13 +285,14 @@ final class SearchModel {
             case .markUnread: meta.isRead = false
             case .flag: meta.isFlagged = true
             case .unflag: meta.isFlagged = false
-            case .trash, .archive, .restore, .junk: break
+            case .trash, .archive, .restore, .junk, .deletePermanently: break
             }
         }
         switch action {
         case .trash, .junk:
             hits.removeAll { $0.id == id }
             for b in rows.keys { rows[b]!.removeAll { $0.id == id } }
+            unread.removeAll { $0.id == id }
             selection = nil
             app.refreshStatus()
         default:
@@ -181,8 +300,9 @@ final class SearchModel {
             for b in rows.keys {
                 if let i = rows[b]!.firstIndex(where: { $0.id == id }) { update(&rows[b]![i].meta) }
             }
+            if let i = unread.firstIndex(where: { $0.id == id }) { update(&unread[i].meta) }
             if message?.meta.id == id { update(&message!.meta) }
-            if action == .flag || action == .unflag { loadRecent() }  // moves it between the pinned section and the feed
+            if [.flag, .unflag, .markUnread].contains(action) { loadRecent() }  // moves it between the sections
         }
     }
 

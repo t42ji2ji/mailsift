@@ -189,4 +189,16 @@ final class AppleMailMIMETests: XCTestCase {
         let data = Data("\(msg.utf8.count)\n\(msg)<?xml version=\"1.0\"?><plist/>".utf8)
         XCTAssertEqual(String(decoding: Emlx.messageBytes(data), as: UTF8.self), msg)
     }
+
+    func testUnsubscribeHeader() {
+        let both = Unsubscribe(header: "<mailto:u@list.com?subject=unsub>, <https://list.com/u?id=1>",
+                               post: "List-Unsubscribe=One-Click")
+        XCTAssertEqual(both?.web?.absoluteString, "https://list.com/u?id=1")
+        XCTAssertEqual(both?.mailto?.absoluteString, "mailto:u@list.com?subject=unsub")
+        XCTAssertEqual(both?.oneClick, true)
+        XCTAssertEqual(Unsubscribe(header: "<https://list.com/u>", post: nil)?.oneClick, false, "no Post header: a page to open")
+        XCTAssertEqual(Unsubscribe(header: "<http://list.com/u>", post: "List-Unsubscribe=One-Click")?.oneClick, false)
+        XCTAssertNil(Unsubscribe(header: "<ftp://list.com>", post: nil))
+        XCTAssertNil(Unsubscribe(header: nil, post: nil))
+    }
 }

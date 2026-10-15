@@ -68,9 +68,55 @@ public struct ParsedMessage: Codable, Sendable {
     public var html: String?
     /// Every non-body part: files and inline images. Metadata only; content via `MailSource.attachmentFile`.
     public var attachments: [Attachment]
+    /// The sender's List-Unsubscribe, when it has one.
+    public var unsubscribe: Unsubscribe?
 
-    public init(meta: MessageMeta, to: [String], cc: [String], bodyText: String, html: String?, attachments: [Attachment] = []) {
+    public init(meta: MessageMeta, to: [String], cc: [String], bodyText: String, html: String?, attachments: [Attachment] = [],
+                unsubscribe: Unsubscribe? = nil) {
         self.meta = meta; self.to = to; self.cc = cc; self.bodyText = bodyText; self.html = html; self.attachments = attachments
+        self.unsubscribe = unsubscribe
+    }
+}
+
+/// How a mailing list takes unsubscribes (RFC 2369, one-click per RFC 8058).
+public struct Unsubscribe: Codable, Sendable, Equatable {
+    public var web: URL?
+    public var mailto: URL?
+    /// `web` takes a POST with no page to visit.
+    public var oneClick: Bool
+
+    /// From the List-Unsubscribe and List-Unsubscribe-Post header values; nil when there is nothing usable.
+    public init?(header: String?, post: String?) {
+        guard let header else { return nil }
+        var web: URL?, mailto: URL?
+        // "<https://…>, <mailto:…>": the URIs sit in angle brackets.
+        for part in header.split(separator: "<") {
+            guard let end = part.firstIndex(of: ">"),
+                  let url = URL(string: part[..<end].trimmingCharacters(in: .whitespacesAndNewlines)) else { continue }
+            switch url.scheme?.lowercased() {
+            case "https", "http": if web == nil { web = url }
+            case "mailto": if mailto == nil { mailto = url }
+            default: break
+            }
+        }
+        guard web != nil || mailto != nil else { return nil }
+        self.web = web
+        self.mailto = mailto
+        oneClick = web?.scheme?.lowercased() == "https"
+            && post?.lowercased().replacingOccurrences(of: " ", with: "").contains("list-unsubscribe=one-click") == true
+    }
+
+    /// Unsubscribes without a page: the one-click POST.
+    public func postOneClick() async throws {
+        guard oneClick, let web else { return }
+        var request = URLRequest(url: web)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("List-Unsubscribe=One-Click".utf8)
+        let (_, response) = try await URLSession.shared.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw URLError(.badServerResponse)
+        }
     }
 }
 
@@ -80,6 +126,8 @@ public enum MailAction: String, Codable, Sendable, CaseIterable {
     case restore
     /// Mark as junk and move to the account's Spam mailbox.
     case junk
+    /// Delete for good; only mail already in Trash. Offered in the app's Trash view only, not to the agent or MCP.
+    case deletePermanently
 }
 
 /// Writing in Mail.app: it owns the accounts and sending, MailSift only opens the window.
@@ -137,11 +185,14 @@ public protocol MailSource: Sendable {
     func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals]
     /// Addresses (lowercased) the user has sent mail to.
     func correspondents() throws -> Set<String>
+    /// Every mail account the client has set up, including ones still downloading.
+    func accounts() throws -> [String]
 }
 
 public extension MailSource {
     func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals] { [:] }
     func correspondents() throws -> Set<String> { [] }
+    func accounts() throws -> [String] { [] }
 }
 
 /// What the mail client knows beyond the headers MailSift indexes.
@@ -223,16 +274,18 @@ public struct SenderStat: Codable, Sendable, Identifiable {
 
 /// Views over the index: inbox, flagged, archive (searchable mail not in the inbox).
 public enum BrowseBox: String, Codable, Sendable, CaseIterable {
-    case inbox, flagged, archive
+    case inbox, flagged, archive, sent
 }
 
 public struct SearchFilter: Codable, Sendable {
     public var account: String?
+    /// Only these accounts (exact); nil is every account.
+    public var accounts: [String]?
     public var sender: String?
     public var after: Date?
     public var before: Date?
 
-    public init(account: String? = nil, sender: String? = nil, after: Date? = nil, before: Date? = nil) {
-        self.account = account; self.sender = sender; self.after = after; self.before = before
+    public init(account: String? = nil, accounts: [String]? = nil, sender: String? = nil, after: Date? = nil, before: Date? = nil) {
+        self.account = account; self.accounts = accounts; self.sender = sender; self.after = after; self.before = before
     }
 }

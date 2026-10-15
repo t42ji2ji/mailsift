@@ -50,6 +50,12 @@ final class IndexStore: @unchecked Sendable {
         -- seq only grows (AUTOINCREMENT), so readers can load new vectors incrementally.
         CREATE TABLE IF NOT EXISTS vectors(
             seq INTEGER PRIMARY KEY AUTOINCREMENT, id INTEGER NOT NULL UNIQUE, vec BLOB NOT NULL);
+        CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY, category TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS categories_category ON categories(category);
+        CREATE TABLE IF NOT EXISTS category_definitions(
+            position INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, description TEXT NOT NULL,
+            hidden INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """
 
     private func write<T>(_ body: (SQLiteConnection) throws -> T) rethrows -> T {
@@ -132,9 +138,11 @@ final class IndexStore: @unchecked Sendable {
             try db.transaction {
                 let messages = try db.prepare("DELETE FROM messages WHERE id=?")
                 let vectors = try db.prepare("DELETE FROM vectors WHERE id=?")
+                let categories = try db.prepare("DELETE FROM categories WHERE id=?")
                 for id in ids {
                     try messages.run([.int(id)])
                     try vectors.run([.int(id)])
+                    try categories.run([.int(id)])
                 }
             }
         }
@@ -154,7 +162,75 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
+    /// Replaces every message's category.
+    func setCategories(_ labels: [Int64: String]) throws {
+        try write { db in
+            try db.transaction {
+                try db.execute("DELETE FROM categories")
+                let statement = try db.prepare("INSERT INTO categories(id, category) VALUES (?, ?)")
+                for (id, category) in labels { try statement.run([.int(id), .text(category)]) }
+            }
+        }
+    }
+
+    func setCategoryDefinitions(_ categories: [MailCategory]) throws {
+        try write { db in
+            try db.transaction {
+                try db.execute("DELETE FROM category_definitions")
+                let statement = try db.prepare("INSERT INTO category_definitions(position, id, name, description, hidden) VALUES (?, ?, ?, ?, ?)")
+                for (i, c) in categories.enumerated() {
+                    try statement.run([.int(Int64(i)), .text(c.id), .text(c.name), .text(c.description), .int(c.hidden ? 1 : 0)])
+                }
+            }
+        }
+    }
+
+    func setSetting(_ key: String, _ value: String) throws {
+        try write { db in
+            try db.prepare("INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?)").run([.text(key), .text(value)])
+        }
+    }
+
     // MARK: - Reads
+
+    func categoryDefinitions() throws -> [MailCategory] {
+        try read { db in
+            var out: [MailCategory] = []
+            try db.query("SELECT id, name, description, hidden FROM category_definitions ORDER BY position") {
+                out.append(MailCategory(id: $0.text(0), name: $0.text(1), description: $0.text(2), hidden: $0.int(3) != 0))
+            }
+            return out
+        }
+    }
+
+    func setting(_ key: String) throws -> String? {
+        try read { db in
+            var value: String?
+            try db.query("SELECT value FROM settings WHERE key = ?", [.text(key)]) { value = $0.text(0) }
+            return value
+        }
+    }
+
+    /// Category ids in use.
+    func categoryIDs() throws -> Set<String> {
+        try read { db in
+            var ids = Set<String>()
+            try db.query("SELECT DISTINCT category FROM categories") { ids.insert($0.text(0)) }
+            return ids
+        }
+    }
+
+    /// Messages per category in `box`.
+    func categoryCounts(_ box: BrowseBox, accounts: [String]?) throws -> [String: Int] {
+        let only = Self.whereClause(SearchFilter(accounts: accounts))
+        return try read { db in
+            var counts: [String: Int] = [:]
+            try db.query(
+                "SELECT c.category, count(*) FROM messages m JOIN categories c ON c.id = m.id WHERE \(Self.boxCondition(box)) AND \(only.sql) GROUP BY c.category",
+                only.args) { counts[$0.text(0)] = Int($0.int(1)) }
+            return counts
+        }
+    }
 
     func allIDs() throws -> Set<Int64> {
         try read { db in
@@ -223,6 +299,15 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
+    /// Account addresses as stored, by message count.
+    func accountList() throws -> [String] {
+        try read { db in
+            var result: [String] = []
+            try db.query("SELECT account FROM messages GROUP BY account ORDER BY count(*) DESC", []) { result.append($0.text(0)) }
+            return result
+        }
+    }
+
     func accounts() throws -> Set<String> {
         try read { db in
             var result = Set<String>()
@@ -244,18 +329,23 @@ final class IndexStore: @unchecked Sendable {
     }
 
     /// Newest messages in a browse box, with the start of their stored body.
-    func recent(_ box: BrowseBox, limit: Int, offset: Int = 0, excludingFlagged: Bool = false) throws -> [(meta: MessageMeta, body: String)] {
-        var condition = switch box {
-        case .inbox: "m.in_inbox = 1"
-        case .archive: "m.in_inbox = 0"
-        case .flagged: "m.is_flagged = 1"
-        }
+    func recent(_ box: BrowseBox, limit: Int, offset: Int = 0, excludingFlagged: Bool = false, isRead: Bool? = nil,
+                accounts: [String]? = nil, category: String? = nil) throws -> [(meta: MessageMeta, body: String)] {
+        var condition = Self.boxCondition(box)
         if excludingFlagged { condition += " AND m.is_flagged = 0" }
+        if let isRead { condition += isRead ? " AND m.is_read = 1" : " AND m.is_read = 0" }
+        let only = Self.whereClause(SearchFilter(accounts: accounts))
+        condition += " AND " + only.sql
+        var args = only.args
+        if let category {
+            condition += " AND m.id IN (SELECT id FROM categories WHERE category = ?)"
+            args.append(.text(category))
+        }
         return try read { db in
             var rows: [(meta: MessageMeta, body: String)] = []
             try db.query(
                 "SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m WHERE \(condition) ORDER BY m.date DESC LIMIT ? OFFSET ?",
-                [.int(Int64(limit)), .int(Int64(offset))]) { rows.append((Self.meta($0), $0.text(12))) }
+                args + [.int(Int64(limit)), .int(Int64(offset))]) { rows.append((Self.meta($0), $0.text(12))) }
             return rows
         }
     }
@@ -305,12 +395,26 @@ final class IndexStore: @unchecked Sendable {
     // MARK: - Search
 
     /// SQL conditions on alias `m` for `filter`. Sender matches a substring of the address or name, ignoring case.
+    static func boxCondition(_ box: BrowseBox) -> String {
+        switch box {
+        case .inbox: "m.in_inbox = 1"
+        case .archive: "m.in_inbox = 0"
+        case .flagged: "m.is_flagged = 1"
+        // Sent mail sits in All Mail like the rest; it is the mail the account sent itself.
+        case .sent: "lower(m.sender_address) = lower(m.account)"
+        }
+    }
+
     static func whereClause(_ filter: SearchFilter) -> (sql: String, args: [SQLValue]) {
         var conditions: [String] = []
         var args: [SQLValue] = []
         if let account = filter.account {
             conditions.append("m.account = ?")
             args.append(.text(account))
+        }
+        if let accounts = filter.accounts {
+            conditions.append("m.account IN (\(accounts.map { _ in "?" }.joined(separator: ",")))")
+            args += accounts.map { .text($0) }
         }
         if let sender = filter.sender {
             conditions.append("(m.sender_address LIKE ? ESCAPE '\\' OR m.sender_name LIKE ? ESCAPE '\\')")
@@ -331,6 +435,15 @@ final class IndexStore: @unchecked Sendable {
     static func escapeLike(_ text: String) -> String {
         text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%")
             .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    /// Lowercased sender address per message.
+    func senderAddresses() throws -> [Int64: String] {
+        try read { db in
+            var out: [Int64: String] = [:]
+            try db.query("SELECT id, lower(sender_address) FROM messages") { out[$0.int(0)] = $0.text(1) }
+            return out
+        }
     }
 
     /// Ids matching `filter`, or nil when the filter is empty.
