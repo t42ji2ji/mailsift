@@ -17,6 +17,46 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(try store.substringSearch(["50%"], filter: .init(), limit: 10), [], "LIKE wildcards are escaped")
     }
 
+    func testFullTextSearchNeedsTheWholeTerm() throws {
+        let store = try IndexStore(url: temporaryDatabaseURL())
+        try store.upsert([
+            .make(1, subject: "本期信用卡帳單", body: ""),
+            .make(2, subject: "信用卡 與 用卡帳", body: "both trigrams, not the term"),
+        ])
+        XCTAssertEqual(try store.fullTextSearch(["信用卡帳"], filter: .init(), limit: 10), [1])
+    }
+
+    func testFullTextSearchPutsSubjectHitsFirstThenNewest() throws {
+        let store = try IndexStore(url: temporaryDatabaseURL())
+        try store.upsert([
+            .make(1, subject: "Your invoice", body: ""),
+            .make(2, subject: "Hello", body: "the invoice is attached"),
+            .make(3, subject: "Hi", body: "another invoice"),
+        ])
+        XCTAssertEqual(try store.fullTextSearch(["invoice"], filter: .init(), limit: 10), [1, 3, 2])
+    }
+
+    func testUpgradeKeywordIndexFromPositions() throws {
+        let url = temporaryDatabaseURL()
+        let store = try IndexStore(url: url)
+        try store.upsert([.make(1, subject: "本期信用卡帳單", body: "")])
+        let old = try SQLiteConnection(url: url)
+        try old.execute("""
+            DROP TABLE messages_fts;
+            CREATE VIRTUAL TABLE messages_fts USING fts5(
+                subject, sender_name, sender_address, body, content='messages', content_rowid='id', tokenize='trigram');
+            INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
+            """)
+        XCTAssertEqual(try store.fullTextSearch(["信用卡帳"], filter: .init(), limit: 10), [1], "works before the upgrade")
+        try store.upgradeKeywordIndex()
+        var sql = ""
+        try old.query("SELECT sql FROM sqlite_master WHERE name = 'messages_fts'") { sql = $0.text(0) }
+        XCTAssertTrue(sql.contains("detail=none"))
+        XCTAssertEqual(try store.fullTextSearch(["信用卡帳"], filter: .init(), limit: 10), [1])
+        try store.upsert([.make(2, subject: "Cloud invoice", body: "")])
+        XCTAssertEqual(try store.fullTextSearch(["invoice"], filter: .init(), limit: 10), [2], "triggers still feed it")
+    }
+
     func testDeleteRemovesTextAndVectors() throws {
         let store = try IndexStore(url: temporaryDatabaseURL())
         try store.upsert([.make(1, subject: "delete me please"), .make(2, subject: "keep me please")])

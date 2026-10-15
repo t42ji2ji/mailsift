@@ -24,6 +24,12 @@ final class IndexStore: @unchecked Sendable {
         reader = try SQLiteConnection(url: url)
     }
 
+    /// detail=none: no token positions, about a quarter of the size. Phrases can't be matched, so a term's trigrams
+    /// are ANDed and the term itself is checked against the text (`fullTextSearch`).
+    private static let ftsColumns = """
+        subject, sender_name, sender_address, body, content='messages', content_rowid='id', tokenize='trigram', detail=none
+        """
+
     private static let schema = """
         CREATE TABLE IF NOT EXISTS messages(
             id INTEGER PRIMARY KEY, account TEXT NOT NULL, mailbox_id INTEGER NOT NULL, mailbox_name TEXT NOT NULL,
@@ -31,8 +37,7 @@ final class IndexStore: @unchecked Sendable {
             sender_name TEXT NOT NULL, is_read INTEGER NOT NULL, is_flagged INTEGER NOT NULL, body TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS messages_date ON messages(date DESC);
         CREATE INDEX IF NOT EXISTS messages_sender ON messages(sender_address COLLATE NOCASE, account);
-        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-            subject, sender_name, sender_address, body, content='messages', content_rowid='id', tokenize='trigram');
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(\(ftsColumns));
         CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
             INSERT INTO messages_fts(rowid, subject, sender_name, sender_address, body)
             VALUES (new.id, new.subject, new.sender_name, new.sender_address, new.body);
@@ -68,6 +73,24 @@ final class IndexStore: @unchecked Sendable {
         readLock.lock()
         defer { readLock.unlock() }
         return try body(reader)
+    }
+
+    /// Rebuilds a keyword index made by earlier versions (with positions) as detail=none, then compacts the file so
+    /// the space is returned. Searches keep working on either.
+    func upgradeKeywordIndex() throws {
+        try write { db in
+            var sql = ""
+            try db.query("SELECT sql FROM sqlite_master WHERE name = 'messages_fts'") { sql = $0.text(0) }
+            guard !sql.contains("detail=none") else { return }
+            try db.transaction {
+                try db.execute("""
+                    DROP TABLE messages_fts;
+                    CREATE VIRTUAL TABLE messages_fts USING fts5(\(Self.ftsColumns));
+                    INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
+                    """)
+            }
+            try db.execute("VACUUM")
+        }
     }
 
     // MARK: - Writes
@@ -457,17 +480,32 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
-    /// FTS5 trigram search: any of `terms` (each ≥ 3 characters, matched as a substring), best bm25 first.
+    /// FTS5 trigram search: any of `terms` (each ≥ 3 characters, matched as a substring); mail with a term in the
+    /// subject or sender first, then newest. The index has no positions, so it finds mail holding all of a term's
+    /// trigrams and LIKE keeps those holding the term itself. Not bm25: without positions it re-tokenizes every match.
     func fullTextSearch(_ terms: [String], filter: SearchFilter, limit: Int) throws -> [Int64] {
-        let match = terms.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-            .joined(separator: " OR ")
+        let match = terms.map { term -> String in
+            // Code points, as the trigram tokenizer counts them.
+            let chars = Array(term.unicodeScalars)
+            let trigrams = (0...chars.count - 3).map { i -> String in
+                let trigram = String(String.UnicodeScalarView(chars[i..<i + 3]))
+                return "\"" + trigram.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            }
+            return "(" + trigrams.joined(separator: " AND ") + ")"
+        }.joined(separator: " OR ")
+        let inHeader = "m.subject LIKE ? ESCAPE '\\' OR m.sender_name LIKE ? ESCAPE '\\' OR m.sender_address LIKE ? ESCAPE '\\'"
+        let headerHit = "(" + terms.map { _ in inHeader }.joined(separator: " OR ") + ")"
+        let contains = "(" + terms.map { _ in inHeader + " OR m.body LIKE ? ESCAPE '\\'" }.joined(separator: " OR ") + ")"
+        let patterns = terms.map { SQLValue.text("%" + Self.escapeLike($0) + "%") }
+        let headerArgs = patterns.flatMap { Array(repeating: $0, count: 3) }
+        let containsArgs = patterns.flatMap { Array(repeating: $0, count: 4) }
         let clause = Self.whereClause(filter)
         return try read { db in
             var ids: [Int64] = []
             try db.query("""
                 SELECT m.id FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid
-                WHERE messages_fts MATCH ? AND \(clause.sql) ORDER BY bm25(messages_fts) LIMIT ?
-                """, [.text(match)] + clause.args + [.int(Int64(limit))]) { ids.append($0.int(0)) }
+                WHERE messages_fts MATCH ? AND \(contains) AND \(clause.sql) ORDER BY \(headerHit) DESC, m.date DESC LIMIT ?
+                """, [.text(match)] + containsArgs + clause.args + headerArgs + [.int(Int64(limit))]) { ids.append($0.int(0)) }
             return ids
         }
     }

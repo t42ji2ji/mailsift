@@ -106,6 +106,7 @@ public final class MailLibrary: @unchecked Sendable {
 
     private func syncMessages(_ progress: Progress?) async throws {
         report(progress) { $0.phase = .syncing; $0.message = nil }
+        try store.upgradeKeywordIndex()
         let metas = try source.listMessages()
         let stored = try store.allIDs()
         let gone = stored.subtracting(metas.map(\.id))
