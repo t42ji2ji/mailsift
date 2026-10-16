@@ -99,7 +99,7 @@ struct Wordmark: View {
 
 struct MainView: View {
     enum Pane: Hashable {
-        case box(BrowseBox), drafts, spam, trash, senders, status, settings
+        case box(BrowseBox), drafts, spam, trash, settings
 
         static let mailboxes: [Pane] = [.box(.inbox), .box(.flagged), .box(.archive), .box(.sent), .drafts, .spam, .trash]
 
@@ -113,8 +113,6 @@ struct MainView: View {
             case .drafts: "草稿"
             case .spam: "垃圾郵件"
             case .trash: "垃圾桶"
-            case .senders: "寄件者"
-            case .status: "索引"
             case .settings: "設定"
             }
         }
@@ -129,8 +127,6 @@ struct MainView: View {
             case .drafts: "doc.text"
             case .spam: "xmark.bin"
             case .trash: "trash"
-            case .senders: "person.2"
-            case .status: "circle.dashed"
             case .settings: "gearshape"
             }
         }
@@ -144,8 +140,6 @@ struct MainView: View {
             case .drafts: "5"
             case .spam: "6"
             case .trash: "7"
-            case .senders: "8"
-            case .status: "9"
             case .settings: ","
             }
         }
@@ -160,7 +154,6 @@ struct MainView: View {
     /// Inbox opened in the rail to pick accounts.
     @State private var showAccounts = false
     @State private var search: SearchModel
-    @State private var senders: SendersModel
     @State private var trash: TrashModel
     @State private var spam: TrashModel
     @State private var drafts: TrashModel
@@ -168,7 +161,6 @@ struct MainView: View {
 
     init(app: AppModel) {
         self.app = app
-        _senders = State(initialValue: SendersModel(app: app))
         _trash = State(initialValue: TrashModel(app: app, role: .trash))
         _spam = State(initialValue: TrashModel(app: app, role: .spam))
         _drafts = State(initialValue: TrashModel(app: app, role: .drafts))
@@ -186,12 +178,10 @@ struct MainView: View {
             Group {
                 switch pane {
                 case .box: SearchView(app: app, model: search)
-                case .senders: SendersView(model: senders)
                 case .trash: TrashView(model: trash).id(Pane.trash)
                 case .spam: TrashView(model: spam).id(Pane.spam)
                 case .drafts: TrashView(model: drafts).id(Pane.drafts)
-                case .status: StatusView(app: app)
-                case .settings: SettingsView(search: search)
+                case .settings: SettingsView(app: app, search: search)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -285,10 +275,7 @@ struct MainView: View {
                 ForEach(search.syncingAccounts, id: \.self) { SyncingAccountItem(account: $0) }
             }
             ForEach(Pane.mailboxes.dropFirst(), id: \.self, content: railItem)
-            Spacer().frame(height: 14)
-            railItem(.senders)
             Spacer()
-            railItem(.status)
             railItem(.settings)
                 .padding(.bottom, 14)
         }

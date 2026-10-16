@@ -1,8 +1,10 @@
+import AppKit
 import MailCore
 import SwiftUI
 
 struct SettingsView: View {
     static let loadRemoteKey = "loadRemoteContent"
+    let app: AppModel
     let search: SearchModel
     @AppStorage(loadRemoteKey) private var loadRemote = true
 
@@ -35,6 +37,8 @@ struct SettingsView: View {
                     }
                     .buttonStyle(LineButtonStyle())
                 }
+                IndexSettings(app: app)
+                AgentSetupSettings()
             }
             .overlayScroller()
             .frame(maxWidth: 680, alignment: .leading)
@@ -166,4 +170,109 @@ private struct CategorySettings: View {
         change(&items)
         search.saveCategories(items)
     }
+}
+
+/// How much of the mail has a semantic index, and a manual resync.
+private struct IndexSettings: View {
+    let app: AppModel
+
+    var body: some View {
+        let s = app.status
+        let share = s.totalMessages > 0 ? Double(s.vectorIndexed) / Double(s.totalMessages) : 0
+        VStack(alignment: .leading, spacing: 14) {
+            Eyebrow("索引")
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("\(Int((share * 100).rounded(.down)))%")
+                    .font(.system(size: 24, weight: .semibold).monospacedDigit())
+                    .tracking(-0.5)
+                Text(detail(s)).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                Spacer(minLength: 8)
+                Button("重新同步") { app.resync() }.buttonStyle(LineButtonStyle())
+            }
+            ThinProgress(value: share).frame(height: 3)
+        }
+    }
+
+    private func detail(_ s: IndexStatus) -> String {
+        if case .loading = app.model { return "搜尋模型" + Fmt.model(app.model) }
+        if case .failed = app.model { return Fmt.model(app.model) }
+        return "\(Fmt.phase(s.phase)) · \(Fmt.count(s.vectorIndexed)) / \(Fmt.count(s.totalMessages)) 封"
+    }
+}
+
+/// One copy per agent: English instructions to paste into Claude Code or Codex, which add
+/// MailSift as an MCP server themselves and learn what its tools are for.
+private struct AgentSetupSettings: View {
+    @State private var copied: AgentBackend?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Eyebrow("連接 Claude Code · Codex")
+            Text("複製後貼進 Claude Code 或 Codex 的對話，它會自己把 MailSift 接成 MCP server，之後在任何資料夾都能用語意搜尋、讀你的信。執行它的終端機需要「完全取用磁碟」權限；MailSift 開著時搜尋最快。")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                ForEach(AgentBackend.allCases, id: \.self) { backend in
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(AgentSetup.prompt(for: backend), forType: .string)
+                        copied = backend
+                        Task {
+                            try? await Task.sleep(for: .seconds(1.5))
+                            if copied == backend { copied = nil }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if copied == backend { Image(systemName: "checkmark") } else { BrandLogo(backend: backend, size: 13) }
+                            Text(copied == backend ? "已複製" : "複製給 \(backend.title)")
+                        }
+                    }
+                    .buttonStyle(LineButtonStyle())
+                }
+            }
+        }
+    }
+}
+
+enum AgentSetup {
+    static func addCommand(for backend: AgentBackend) -> String {
+        switch backend {
+        case .claude: "claude mcp add --scope user mailsift -- \(CLIPath.quoted) mcp"
+        case .codex: "codex mcp add mailsift -- \(CLIPath.quoted) mcp"
+        }
+    }
+
+    static func prompt(for backend: AgentBackend) -> String {
+        """
+        I use MailSift, a Mac app that indexes all of my Apple Mail locally: every message is embedded on this Mac \
+        (EmbeddingGemma 2) for semantic search, alongside a keyword index and topic categories. Please connect it as an \
+        MCP server by running this in the shell:
+
+        \(addCommand(for: backend))
+
+        Then, whenever I ask about my email, use its tools instead of guessing:
+        - search_mail: search by meaning. Describe what the message is about in any language; it doesn't need the exact words.
+        - list_recent: recent mail by time, with filters for newsletters, known senders, replied and awaiting a reply.
+        - read_mail / read_thread: read one message, or the whole conversation it belongs to.
+        - list_senders: who sends the most and how much of it stays unread, for cleanup.
+        - index_status: how much of the mailbox is indexed so far.
+        - preview_action, then perform_action: archive, trash, flag or mark read. Always show me the preview and wait \
+        for my confirmation before perform_action.
+
+        Without MCP, the same index answers from the shell: \(CLIPath.quoted) search "<what you're looking for>" --json
+        The terminal running you needs Full Disk Access to read Mail's data. Searches are fastest while MailSift is open.
+        """
+    }
+}
+
+enum CLIPath {
+    /// The CLI shipped in Contents/Helpers; when running unbundled, the build directory's.
+    static let url: URL = {
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/mailsift")
+        if FileManager.default.fileExists(atPath: bundled.path) { return bundled }
+        return Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("mailsift")
+    }()
+
+    static var quoted: String { "\"\(url.path)\"" }
 }
