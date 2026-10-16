@@ -652,7 +652,8 @@ private struct BackendPicker: View {
     }
 }
 
-/// Simple Icons marks (CC0) from Resources/Brand, drawn as templates so they follow ink and paper.
+/// Marks from Resources/Brand (Claude Code's pixel mascot, as on the site; OpenAI from Simple Icons, CC0), drawn as
+/// templates so they follow ink and paper.
 /// Unbundled builds have no resources and fall back to an SF Symbol.
 struct BrandLogo: View {
     let backend: AgentBackend
