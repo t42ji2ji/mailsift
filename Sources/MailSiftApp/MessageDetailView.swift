@@ -78,7 +78,7 @@ struct MessageDetailView: View {
                 .tracking(-0.3)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
-            IconButton(symbol: m.meta.isFlagged ? "flag.fill" : "flag", help: m.meta.isFlagged ? "移除旗標" : "加旗標",
+            IconButton(symbol: m.meta.isFlagged ? "flag.fill" : "flag", help: m.meta.isFlagged ? "移除旗標（S）" : "加旗標（S）",
                        tint: m.meta.isFlagged ? Theme.flag : nil) {
                 model.perform(m.meta.isFlagged ? .unflag : .flag)
             }
@@ -164,12 +164,12 @@ struct MessageDetailView: View {
                 unsubscribeButton(u)
                 Rectangle().fill(Theme.hairline).frame(width: 1, height: 16).padding(.horizontal, 4)
             }
-            IconButton(symbol: "archivebox", help: "封存") { model.perform(.archive) }
+            IconButton(symbol: "archivebox", help: "封存（E）") { model.perform(.archive) }
             IconButton(symbol: "xmark.bin", help: "標為垃圾郵件") { model.perform(.junk) }
-            IconButton(symbol: meta.isRead ? "envelope.badge" : "envelope.open", help: meta.isRead ? "標為未讀" : "標為已讀") {
+            IconButton(symbol: meta.isRead ? "envelope.badge" : "envelope.open", help: meta.isRead ? "標為未讀（U）" : "標為已讀（U）") {
                 model.perform(meta.isRead ? .markUnread : .markRead)
             }
-            IconButton(symbol: "trash", help: "移到垃圾桶") { model.perform(.trash) }
+            IconButton(symbol: "trash", help: "移到垃圾桶（#）") { model.perform(.trash) }
         }
         .disabled(model.actionRunning)
         .padding(.horizontal, 16)
