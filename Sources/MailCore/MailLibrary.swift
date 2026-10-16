@@ -193,6 +193,11 @@ public final class MailLibrary: @unchecked Sendable {
         }
     }
 
+    /// How many messages are in a browse box.
+    public func count(_ box: BrowseBox, accounts: [String]? = nil, category: String? = nil) -> Int {
+        (try? store.count(box, accounts: accounts, category: category)) ?? 0
+    }
+
     public func attachmentFile(_ meta: MessageMeta, _ attachment: Attachment) throws -> URL {
         try source.attachmentFile(meta, attachment)
     }
@@ -224,8 +229,8 @@ public final class MailLibrary: @unchecked Sendable {
     public func accounts() -> [String] { (try? store.accountList()) ?? [] }
 
     /// Accounts set up in the mail client with no indexed mail yet: the client is still downloading them.
-    public func syncingAccounts() -> [String] {
-        let indexed = Set(accounts())
+    public func syncingAccounts(indexed: [String]) -> [String] {
+        let indexed = Set(indexed)
         return ((try? source.accounts()) ?? []).filter { !indexed.contains($0) }
     }
 

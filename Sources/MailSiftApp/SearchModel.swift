@@ -9,8 +9,11 @@ final class SearchModel {
     /// Newest mail per mailbox while the query is empty, paged in as the list scrolls.
     /// Inbox holds only read, unflagged mail: unread and flagged mail sit above it.
     private(set) var rows: [BrowseBox: [SearchHit]] = [:]
-    /// All unread inbox mail, on top. A message read while open stays until another one is selected.
+    /// The newest unread inbox mail, on top; the unread box has all of it. A message read while open stays until
+    /// another one is selected.
     private(set) var unread: [SearchHit] = []
+    private(set) var unreadCount = 0
+    static let unreadPreview = 10
     /// Inbox under the unread section: flagged mail pinned, then the rest. Each message appears once.
     var pinned: [SearchHit] { leavingOutUnread(rows[.flagged, default: []]) }
     var feed: [SearchHit] { leavingOutUnread(rows[.inbox, default: []]) }
@@ -81,7 +84,8 @@ final class SearchModel {
             guard box != oldValue else { return }
             selections[oldValue] = selection
             selection = selections[box]
-            if rows[box] == nil { loadRecent() } else { loadCounts() }
+            if rows[box] == nil || box == .unread, let lib = app.library { load(box, lib) }  // unread mail changes as it is read
+            loadCounts()
         }
     }
 
@@ -113,49 +117,81 @@ final class SearchModel {
     /// Reloads unread mail, Inbox, the pinned flagged mail and the open box, keeping as many rows as each already has.
     func loadRecent() {
         guard let lib = app.library else { return }
-        accounts = lib.accounts()
-        syncingAccounts = lib.syncingAccounts()
-        let only = shownAccounts
-        let category = category
-        loadCounts()
         pendingLoads += 1
         Task {
             defer { pendingLoads -= 1 }
-            var fresh = await Task.detached { lib.recent(.inbox, limit: -1, isRead: false, accounts: only, category: category) }.value
-            guard category == self.category else { return }
-            // The open message was unread when opened: it stays put until another is selected.
-            if let id = selection, let open = unread.first(where: { $0.id == id }), !fresh.contains(where: { $0.id == id }) {
-                fresh.append(open)
-                fresh.sort { $0.meta.date > $1.meta.date }
-            }
-            unread = fresh
+            // Listing accounts groups every message: done off the main thread, before the boxes that filter by them.
+            let (indexed, syncing) = await Task.detached {
+                let accounts = lib.accounts()
+                return (accounts, lib.syncingAccounts(indexed: accounts))
+            }.value
+            // Assigned only when changed: every assignment redraws the list.
+            if indexed != accounts { accounts = indexed }
+            if syncing != syncingAccounts { syncingAccounts = syncing }
+            loadCounts()
+            loadUnread(lib)
+            for box in Set([.inbox, .flagged, box]) { load(box, lib) }
         }
-        for box in Set([.inbox, .flagged, box]) {
-            // Flagged mail loads whole (a negative LIMIT is none in SQLite): the pinned section counts it.
-            let limit = box == .flagged ? -1 : max(rows[box]?.count ?? 0, Self.page)
-            pendingLoads += 1
-            Task {
-                defer { pendingLoads -= 1 }
-                let fresh = await Task.detached {
-                    lib.recent(box, limit: limit, excludingFlagged: box == .inbox, isRead: box == .inbox ? true : nil, accounts: only,
-                               category: category)
-                }.value
-                guard category == self.category else { return }
-                rows[box] = fresh
-                if box == .flagged || fresh.count < limit { exhausted.insert(box) } else { exhausted.remove(box) }
-            }
+    }
+
+    private func loadUnread(_ lib: MailLibrary) {
+        let only = shownAccounts
+        let category = category
+        let limit = Self.unreadPreview
+        pendingLoads += 1
+        Task {
+            defer { pendingLoads -= 1 }
+            var (fresh, count) = await Task.detached {
+                (lib.recent(.unread, limit: limit, accounts: only, category: category), lib.count(.unread, accounts: only, category: category))
+            }.value
+            guard category == self.category else { return }
+            keepOpen(&fresh, from: unread)
+            if fresh.map(\.meta) != unread.map(\.meta) { unread = fresh }
+            if count != unreadCount { unreadCount = count }
+        }
+    }
+
+    /// The open message was unread when opened: it stays put until another is selected. Its row keeps what it shows
+    /// now, since a read that started before opening it may have missed it being marked read.
+    private func keepOpen(_ fresh: inout [SearchHit], from old: [SearchHit]) {
+        guard let id = selection, let open = old.first(where: { $0.id == id }) else { return }
+        if let i = fresh.firstIndex(where: { $0.id == id }) {
+            fresh[i] = open
+        } else {
+            fresh.append(open)
+            fresh.sort { $0.meta.date > $1.meta.date }
+        }
+    }
+
+    private func load(_ box: BrowseBox, _ lib: MailLibrary) {
+        let only = shownAccounts
+        let category = category
+        // Flagged mail loads whole (a negative LIMIT is none in SQLite): the pinned section counts it.
+        let limit = box == .flagged ? -1 : max(rows[box]?.count ?? 0, Self.page)
+        pendingLoads += 1
+        Task {
+            defer { pendingLoads -= 1 }
+            var fresh = await Task.detached {
+                lib.recent(box, limit: limit, excludingFlagged: box == .inbox, isRead: box == .inbox ? true : nil, accounts: only,
+                           category: category)
+            }.value
+            guard category == self.category else { return }
+            if box == .unread { keepOpen(&fresh, from: rows[box, default: []]) }
+            if fresh.map(\.meta) != rows[box]?.map(\.meta) { rows[box] = fresh }
+            if box == .flagged || fresh.count < limit { exhausted.insert(box) } else { exhausted.remove(box) }
         }
     }
 
     private func loadCounts() {
         guard let lib = app.library else { return }
-        categories = lib.categories()
+        let fresh = lib.categories()
+        if fresh != categories { categories = fresh }
         let box = box
         let only = shownAccounts
         Task {
             let counts = await Task.detached { lib.categoryCounts(box, accounts: only) }.value
             guard box == self.box else { return }
-            categoryCounts = counts
+            if counts != categoryCounts { categoryCounts = counts }
         }
     }
 
@@ -184,8 +220,9 @@ final class SearchModel {
 
     /// A message read while open leaves the unread section once another one is selected, and drops into its place below.
     private func settle(_ id: Int64?) {
-        guard let id, let i = unread.firstIndex(where: { $0.id == id }), unread[i].meta.isRead else { return }
-        unread.remove(at: i)
+        guard let id, let hit = (unread + rows[.unread, default: []]).first(where: { $0.id == id }), hit.meta.isRead else { return }
+        unread.removeAll { $0.id == id }
+        rows[.unread]?.removeAll { $0.id == id }
         loadRecent()
     }
 
@@ -293,6 +330,7 @@ final class SearchModel {
             hits.removeAll { $0.id == id }
             for b in rows.keys { rows[b]!.removeAll { $0.id == id } }
             unread.removeAll { $0.id == id }
+            if let lib = app.library { loadUnread(lib) }  // its count
             selection = nil
             app.refreshStatus()
         default:

@@ -109,6 +109,7 @@ struct MainView: View {
             case .box(.flagged): "旗標"
             case .box(.archive): "封存"
             case .box(.sent): "寄件備份"
+            case .box(.unread): "未讀"
             case .drafts: "草稿"
             case .spam: "垃圾郵件"
             case .trash: "垃圾桶"
@@ -124,6 +125,7 @@ struct MainView: View {
             case .box(.flagged): "flag"
             case .box(.archive): "archivebox"
             case .box(.sent): "paperplane"
+            case .box(.unread): "envelope.badge"
             case .drafts: "doc.text"
             case .spam: "xmark.bin"
             case .trash: "trash"
@@ -135,7 +137,7 @@ struct MainView: View {
 
         var key: KeyEquivalent {
             switch self {
-            case .box(.inbox): "1"
+            case .box(.inbox), .box(.unread): "1"  // unread is opened from Inbox, not the rail
             case .box(.flagged): "2"
             case .box(.archive): "3"
             case .box(.sent): "4"
@@ -242,7 +244,9 @@ struct MainView: View {
     private var iconsOnly: Bool { compactRail || !showRail }
 
     private func railItem(_ p: Pane) -> some View {
-        RailItem(title: p.title, symbol: p.symbol, selected: pane == p, compact: iconsOnly) { pane = p }
+        // The unread box is opened from Inbox, so Inbox stays selected over it.
+        RailItem(title: p.title, symbol: p.symbol, selected: pane == p || p == .box(.inbox) && pane == .box(.unread),
+                 compact: iconsOnly) { pane = p }
             .keyboardShortcut(p.key, modifiers: .command)
     }
 
@@ -259,7 +263,7 @@ struct MainView: View {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 10, weight: .semibold))
                                 .rotationEffect(.degrees(showAccounts ? 90 : 0))
-                                .foregroundStyle(pane == .box(.inbox) ? Theme.paper : Theme.muted)
+                                .foregroundStyle(pane == .box(.inbox) || pane == .box(.unread) ? Theme.paper : Theme.muted)
                                 .frame(width: 28, height: 32)
                                 .contentShape(Rectangle())
                         }

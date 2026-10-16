@@ -277,7 +277,7 @@ public struct SenderStat: Codable, Sendable, Identifiable {
 
 /// Views over the index: inbox, flagged, archive (searchable mail not in the inbox).
 public enum BrowseBox: String, Codable, Sendable, CaseIterable {
-    case inbox, flagged, archive, sent
+    case inbox, flagged, archive, sent, unread
 }
 
 public struct SearchFilter: Codable, Sendable {

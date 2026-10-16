@@ -1,15 +1,18 @@
 import Foundation
 
 /// The on-disk index: message metadata + body text, a trigram FTS5 table over it, and Float16 vectors.
-/// Two connections in WAL mode, so searches read while the indexer writes; each connection has its own lock.
+/// Three connections in WAL mode, so searches read while the indexer writes and list browsing never queues behind
+/// either; each connection has its own lock.
 final class IndexStore: @unchecked Sendable {
     /// Bodies are stored up to this many characters for keyword search; the reader view re-parses the source.
     static let maxStoredBody = 20_000
 
     private let writer: SQLiteConnection
     private let reader: SQLiteConnection
+    private let browser: SQLiteConnection
     private let writeLock = NSLock()
     private let readLock = NSLock()
+    private let browseLock = NSLock()
 
     init(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -22,6 +25,7 @@ final class IndexStore: @unchecked Sendable {
             try writer.execute("ALTER TABLE messages ADD COLUMN in_inbox INTEGER NOT NULL DEFAULT 1")
         }
         reader = try SQLiteConnection(url: url)
+        browser = try SQLiteConnection(url: url)
     }
 
     /// detail=none: no token positions, about a quarter of the size. Phrases can't be matched, so a term's trigrams
@@ -73,6 +77,12 @@ final class IndexStore: @unchecked Sendable {
         readLock.lock()
         defer { readLock.unlock() }
         return try body(reader)
+    }
+
+    private func browse<T>(_ body: (SQLiteConnection) throws -> T) rethrows -> T {
+        browseLock.lock()
+        defer { browseLock.unlock() }
+        return try body(browser)
     }
 
     /// Rebuilds a keyword index made by earlier versions (with positions) as detail=none, then compacts the file so
@@ -324,7 +334,7 @@ final class IndexStore: @unchecked Sendable {
 
     /// Account addresses as stored, by message count.
     func accountList() throws -> [String] {
-        try read { db in
+        try browse { db in
             var result: [String] = []
             try db.query("SELECT account FROM messages GROUP BY account ORDER BY count(*) DESC", []) { result.append($0.text(0)) }
             return result
@@ -354,23 +364,40 @@ final class IndexStore: @unchecked Sendable {
     /// Newest messages in a browse box, with the start of their stored body.
     func recent(_ box: BrowseBox, limit: Int, offset: Int = 0, excludingFlagged: Bool = false, isRead: Bool? = nil,
                 accounts: [String]? = nil, category: String? = nil) throws -> [(meta: MessageMeta, body: String)] {
-        var condition = Self.boxCondition(box)
-        if excludingFlagged { condition += " AND m.is_flagged = 0" }
-        if let isRead { condition += isRead ? " AND m.is_read = 1" : " AND m.is_read = 0" }
-        let only = Self.whereClause(SearchFilter(accounts: accounts))
-        condition += " AND " + only.sql
-        var args = only.args
-        if let category {
-            condition += " AND m.id IN (SELECT id FROM categories WHERE category = ?)"
-            args.append(.text(category))
-        }
-        return try read { db in
+        let (condition, args) = Self.browseCondition(box, excludingFlagged: excludingFlagged, isRead: isRead, accounts: accounts,
+                                                     category: category)
+        return try browse { db in
             var rows: [(meta: MessageMeta, body: String)] = []
             try db.query(
                 "SELECT \(Self.metaColumns), substr(m.body, 1, 400) FROM messages m WHERE \(condition) ORDER BY m.date DESC LIMIT ? OFFSET ?",
                 args + [.int(Int64(limit)), .int(Int64(offset))]) { rows.append((Self.meta($0), $0.text(12))) }
             return rows
         }
+    }
+
+    /// How many messages are in a browse box.
+    func count(_ box: BrowseBox, accounts: [String]? = nil, category: String? = nil) throws -> Int {
+        let (condition, args) = Self.browseCondition(box, excludingFlagged: false, isRead: nil, accounts: accounts, category: category)
+        return try browse { db in
+            var count = 0
+            try db.query("SELECT count(*) FROM messages m WHERE \(condition)", args) { count = Int($0.int(0)) }
+            return count
+        }
+    }
+
+    private static func browseCondition(_ box: BrowseBox, excludingFlagged: Bool, isRead: Bool?, accounts: [String]?,
+                                        category: String?) -> (sql: String, args: [SQLValue]) {
+        var condition = boxCondition(box)
+        if excludingFlagged { condition += " AND m.is_flagged = 0" }
+        if let isRead { condition += isRead ? " AND m.is_read = 1" : " AND m.is_read = 0" }
+        let only = whereClause(SearchFilter(accounts: accounts))
+        condition += " AND " + only.sql
+        var args = only.args
+        if let category {
+            condition += " AND m.id IN (SELECT id FROM categories WHERE category = ?)"
+            args.append(.text(category))
+        }
+        return (condition, args)
     }
 
     /// All messages whose sender address equals `address` (case-insensitive), newest first.
@@ -425,6 +452,7 @@ final class IndexStore: @unchecked Sendable {
         case .flagged: "m.is_flagged = 1"
         // Sent mail sits in All Mail like the rest; it is the mail the account sent itself.
         case .sent: "lower(m.sender_address) = lower(m.account)"
+        case .unread: "m.in_inbox = 1 AND m.is_read = 0"
         }
     }
 

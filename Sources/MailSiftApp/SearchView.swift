@@ -45,7 +45,7 @@ struct SearchView: View {
             Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.muted)
             IMESearchField(prompt: "用一句話描述你要找的信", clearToken: clearToken, onEdit: { hasText = $0 }) { model.submit($0) }
                 .frame(height: 22)
-            if model.searching || model.pendingLoads > 0 || app.status.phase == .syncing { ProgressView().controlSize(.mini) }
+            Spinner(app: app, model: model)
             if hasText {
                 Button { clearToken += 1 } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(Theme.faint)
@@ -105,7 +105,7 @@ struct SearchView: View {
         Button { model.box = .inbox } label: {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold))
-                Text(model.box == .flagged ? "旗標" : model.box == .sent ? "寄件備份" : "封存").font(.system(size: 13, weight: .semibold))
+                Text(model.box == .unread ? "未讀" : model.box == .flagged ? "旗標" : model.box == .sent ? "寄件備份" : "封存").font(.system(size: 13, weight: .semibold))
                 Spacer()
             }
             .padding(.horizontal, 18)
@@ -118,13 +118,24 @@ struct SearchView: View {
 
     /// Unread mail on top, then flagged mail pinned (its first rows), then the rest of the inbox by date.
     private var inboxSections: [DateSection] {
-        let unread = model.unread.isEmpty ? [] : [DateSection(title: "未讀", hits: model.unread)]
-        let pinned = model.pinned.isEmpty ? [] : [DateSection(title: "旗標", hits: model.pinned, truncated: true)]
+        let unread = model.unread.isEmpty ? [] : [DateSection(title: "未讀", hits: model.unread, total: model.unreadCount,
+                                                                    more: (SearchModel.unreadPreview, .unread))]
+        let pinned = model.pinned.isEmpty ? [] : [DateSection(title: "旗標", hits: model.pinned, more: (3, .flagged))]
         return unread + pinned + DateSection.group(model.feed)
     }
 }
 
 /// Scrolls sideways by dragging with the mouse as well as by trackpad, with no scroll bar.
+/// Its own view so that progress reports during indexing redraw only this, not the list.
+private struct Spinner: View {
+    let app: AppModel
+    let model: SearchModel
+
+    var body: some View {
+        if model.searching || model.pendingLoads > 0 || app.status.phase == .syncing { ProgressView().controlSize(.mini) }
+    }
+}
+
 private struct CategoryBar: View {
     let model: SearchModel
     @State private var position = ScrollPosition()
@@ -203,9 +214,12 @@ private struct CategoryChip: View {
 struct DateSection: Identifiable {
     let title: String
     let hits: [SearchHit]
-    /// Shows its first rows and a "顯示全部" that opens the whole box.
-    var truncated = false
+    /// How many there are when `hits` holds only the first of them.
+    var total: Int?
+    /// Shows its first `preview` rows and a "顯示全部" that opens the whole box.
+    var more: (preview: Int, opens: BrowseBox)?
     var id: String { title }
+    var count: Int { max(total ?? 0, hits.count) }
 
     /// 今天 / 昨天 / 本週 / 本月 / 更早, newest first, empty groups dropped.
     static func group(_ hits: [SearchHit], now: Date = .now) -> [DateSection] {
@@ -228,18 +242,17 @@ struct DateSection: Identifiable {
 }
 
 /// Sectioned, keyboard-navigable list. While browsing it pages in more mail at the end; the pinned section shows
-/// its first rows and "顯示全部" opens the flagged box over it.
+/// unread and flagged sections show their first rows and "顯示全部" opens their box over it.
 private struct HitList: View {
     @Bindable var model: SearchModel
     let sections: [DateSection]
     let showMatch: Bool
     /// False while covered by another box: it keeps its place but takes no focus or keys.
     var active = true
-    var preview = 3
     @FocusState private var focused: Bool
 
     private func visible(_ section: DateSection) -> [SearchHit] {
-        section.truncated ? Array(section.hits.prefix(preview)) : section.hits
+        section.more.map { Array(section.hits.prefix($0.preview)) } ?? section.hits
     }
 
     var body: some View {
@@ -250,13 +263,13 @@ private struct HitList: View {
                         header(section)
                         ForEach(visible(section)) { hit in
                             HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch)
-                                .id(hit.id)
+                                .id(rowID(section, hit))
                                 .onTapGesture {
                                     model.selection = hit.id
                                     focused = true
                                 }
                         }
-                        if section.truncated, section.hits.count > preview { showAll(section) }
+                        if let more = section.more, section.count > more.preview { showAll(section, opens: more.opens) }
                     }
                     if !showMatch { Color.clear.frame(height: 1).onAppear { model.loadMore() } }
                 }
@@ -278,7 +291,7 @@ private struct HitList: View {
             Eyebrow(section.title)
             Spacer()
             if !showMatch {
-                Text(Fmt.count(section.hits.count)).font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.faint)
+                Text(Fmt.count(section.count)).font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.faint)
             }
         }
         .padding(.horizontal, 10)
@@ -286,10 +299,10 @@ private struct HitList: View {
         .padding(.bottom, 4)
     }
 
-    private func showAll(_ section: DateSection) -> some View {
-        Button { model.box = .flagged } label: {
+    private func showAll(_ section: DateSection, opens box: BrowseBox) -> some View {
+        Button { model.box = box } label: {
             HStack(spacing: 4) {
-                Text("顯示全部 \(Fmt.count(section.hits.count)) 封")
+                Text("顯示全部 \(Fmt.count(section.count)) 封")
                 Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
             }
             .font(.system(size: 12, weight: .medium))
@@ -324,14 +337,18 @@ private struct HitList: View {
     }
 
     private func move(_ step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
-        let rows = sections.flatMap(visible)
+        let rows = sections.flatMap { s in visible(s).map { (s, $0) } }
         guard !rows.isEmpty else { return .ignored }
-        let current = rows.firstIndex { $0.id == model.selection } ?? (step > 0 ? -1 : rows.count)
+        let current = rows.firstIndex { $0.1.id == model.selection } ?? (step > 0 ? -1 : rows.count)
         let next = min(max(current + step, 0), rows.count - 1)
-        model.selection = rows[next].id
-        proxy.scrollTo(rows[next].id)
+        model.selection = rows[next].1.id
+        proxy.scrollTo(rowID(rows[next].0, rows[next].1))
         return .handled
     }
+
+    /// A message moving between sections (unread dropping into 今天) is a new row, not the old one carried along
+    /// mid-animation with its selection.
+    private func rowID(_ section: DateSection, _ hit: SearchHit) -> String { "\(section.id)/\(hit.id)" }
 }
 
 struct Message: View {
