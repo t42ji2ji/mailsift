@@ -32,6 +32,12 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
+                    if !search.accounts.isEmpty || !search.syncingAccounts.isEmpty {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(search.accounts, id: \.self) { AccountRow(account: $0, syncing: false) }
+                            ForEach(search.syncingAccounts, id: \.self) { AccountRow(account: $0, syncing: true) }
+                        }
+                    }
                     Button("新增郵件帳號…") {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Internet-Accounts-Settings.extension")!)
                     }
@@ -47,6 +53,27 @@ struct SettingsView: View {
             .padding(.bottom, 40)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// An account set up in Apple Mail; one still downloading says so.
+private struct AccountRow: View {
+    let account: String
+    let syncing: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if syncing {
+                ProgressView().controlSize(.mini).frame(width: 16)
+            } else {
+                Image(systemName: "envelope").font(.system(size: 12)).foregroundStyle(Theme.muted).frame(width: 16)
+            }
+            Text(account).font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
+            if syncing { Text("同步中").font(.system(size: 11)).foregroundStyle(Theme.faint) }
+        }
+        .frame(height: 30)
+        .help(syncing ? "\(account)：Apple Mail 還在下載這個帳號的信，下載好就會出現" : account)
     }
 }
 
