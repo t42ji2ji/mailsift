@@ -121,7 +121,8 @@ final class AppModel {
         let report: MailLibrary.Progress = { s in
             Task { @MainActor in self.status = s }
         }
-        indexTask = Task {
+        // Below the user's own actions: opening mail and marking it read come first.
+        indexTask = Task(priority: .utility) {
             await previous?.value
             indexing = true
             // Nothing changed in Mail: the lists stay as they are.

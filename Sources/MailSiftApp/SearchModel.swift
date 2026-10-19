@@ -269,6 +269,7 @@ final class SearchModel {
             case .success(let m):
                 message = m
                 html = m.html
+                if !m.meta.isRead { read(id, lib) }  // opening reads it, as in Mail
                 Task {
                     let conversation = await Task.detached { (try? lib.thread(id)) ?? [] }.value
                     if selection == id { thread = conversation }
@@ -277,7 +278,6 @@ final class SearchModel {
                     let resolved = await Task.detached { Self.inlineImages(m, lib) }.value
                     if selection == id { html = resolved }
                 }
-                if !m.meta.isRead { perform(.markRead) }  // opening reads it, as in Mail
             case .failure(let e): actionError = e.localizedDescription
             }
         }
@@ -314,6 +314,23 @@ final class SearchModel {
         }
     }
 
+    /// Marks an opened message read. Not held up by, nor holding up, other actions: the next message may be opened
+    /// before Mail answers.
+    private func read(_ id: Int64, _ lib: MailLibrary) {
+        Task {
+            do {
+                let report = try await lib.perform(.markRead, ids: [id])
+                if let why = report.failed[id] {
+                    if selection == id { actionError = why }
+                    return
+                }
+                apply(.markRead, to: id)
+            } catch {
+                if selection == id { actionError = Self.describe(error) }
+            }
+        }
+    }
+
     /// Mirrors a successful action in the visible list and detail.
     private func apply(_ action: MailAction, to id: Int64) {
         func update(_ meta: inout MessageMeta) {
@@ -341,6 +358,7 @@ final class SearchModel {
             if let i = unread.firstIndex(where: { $0.id == id }) { update(&unread[i].meta) }
             if message?.meta.id == id { update(&message!.meta) }
             if [.flag, .unflag, .markUnread].contains(action) { loadRecent() }  // moves it between the sections
+            if action == .markRead, id != selection { settle(id) }  // read after another was opened
         }
     }
 
