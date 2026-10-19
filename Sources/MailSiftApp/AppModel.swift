@@ -81,10 +81,22 @@ final class AppModel {
         autoSyncTask?.cancel()
         autoSyncTask = Task {
             while !Task.isCancelled {
+                Self.wakeMail()
                 try? await Task.sleep(for: .seconds(60))
                 if !indexing { runIndex(lib) }
             }
         }
+    }
+
+    /// Only Mail fetches mail and posts its notifications: keep it running, hidden and in the background.
+    private static func wakeMail() {
+        let id = "com.apple.mail"
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty,
+              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        config.hides = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config)
     }
 
     /// Called after actions that change the index outside sync (trash).
