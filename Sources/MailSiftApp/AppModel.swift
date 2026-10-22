@@ -76,6 +76,21 @@ final class AppModel {
         runIndex(lib, force: true)
     }
 
+    /// Has Mail fetch from the servers now, then resyncs; looks again shortly after for mail still downloading.
+    func refreshNow() {
+        guard let lib = library else { return }
+        Self.wakeMail()
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSDictionary?
+            NSAppleScript(source: "tell application \"Mail\" to check for new mail")?.executeAndReturnError(&error)
+        }
+        runIndex(lib, force: true)
+        Task {
+            try? await Task.sleep(for: .seconds(8))
+            if !indexing { runIndex(lib) }
+        }
+    }
+
     /// New mail arrives through Mail.app; pick it up every minute (sync only reads what changed).
     private func startAutoSync(_ lib: MailLibrary) {
         autoSyncTask?.cancel()

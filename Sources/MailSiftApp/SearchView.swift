@@ -59,12 +59,17 @@ struct SearchView: View {
         .frame(height: 40)
         .background(Theme.fill, in: RoundedRectangle(cornerRadius: 10))
         .overlay(alignment: .trailing) {
-            IconButton(symbol: "square.and.pencil", help: "新郵件（⌘N）") { Compose.newMessage() }
-                .keyboardShortcut("n", modifiers: .command)
-                .offset(x: 38)
+            HStack(spacing: 2) {
+                IconButton(symbol: "arrow.clockwise", help: "立即收信並重新整理（⇧⌘N）") { app.refreshNow() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(app.status.phase == .syncing)
+                IconButton(symbol: "square.and.pencil", help: "新郵件（⌘N）") { Compose.newMessage() }
+                    .keyboardShortcut("n", modifiers: .command)
+            }
+            .offset(x: 70)
         }
         .padding(.leading, 14)
-        .padding(.trailing, 52)
+        .padding(.trailing, 84)
         .padding(.top, 42)
         .padding(.bottom, 8)
         .task(id: app.indexRevision) { model.loadRecent() }
@@ -92,8 +97,28 @@ struct SearchView: View {
         } else if model.hits.isEmpty, !model.searching {
             Message(symbol: "tray", text: "沒有結果")
         } else {
-            HitList(model: model, sections: [DateSection(title: "\(model.hits.count) 封結果", hits: model.hits)], showMatch: true)
+            VStack(spacing: 0) {
+                sortRow
+                HitList(model: model, sections: model.newestFirst
+                    ? DateSection.group(model.hits.sorted { $0.meta.date > $1.meta.date })
+                    : [DateSection(title: "", hits: model.hits)], showMatch: true)
+            }
         }
+    }
+
+    /// Result count, and whether this search's results run by relevance or newest first.
+    private var sortRow: some View {
+        HStack(spacing: 6) {
+            Eyebrow("\(model.hits.count) 封結果")
+            Spacer()
+            CategoryChip(name: "相關", count: nil, selected: !model.newestFirst) { model.newestFirst = false }
+                .help("依相關程度排序")
+            CategoryChip(name: "最新", count: nil, selected: model.newestFirst) { model.newestFirst = true }
+                .help("依日期排序，最新的在上面")
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     /// Topic chips over the list; picking one narrows every box to it, picking it again shows all.
@@ -260,7 +285,7 @@ private struct HitList: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(sections) { section in
-                        header(section)
+                        if !section.title.isEmpty { header(section) }
                         ForEach(visible(section)) { hit in
                             HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch)
                                 .id(rowID(section, hit))

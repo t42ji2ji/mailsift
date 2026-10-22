@@ -6,6 +6,8 @@ import Observation
 final class SearchModel {
     private(set) var query = ""
     private(set) var hits: [SearchHit] = []
+    /// Results shown newest first instead of by relevance; each new search starts by relevance.
+    var newestFirst = false
     /// Newest mail per mailbox while the query is empty, paged in as the list scrolls.
     /// Inbox holds only read, unflagged mail: unread and flagged mail sit above it.
     private(set) var rows: [BrowseBox: [SearchHit]] = [:]
@@ -230,6 +232,7 @@ final class SearchModel {
     func submit(_ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         searchTask?.cancel()
+        if text != query { newestFirst = false }
         query = text
         searchError = nil
         guard !text.isEmpty, let lib = app.library else {
