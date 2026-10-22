@@ -269,9 +269,11 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
     }
 
     /// Size and modification time of the Envelope Index and its WAL: Mail writes one of them for every change (new
-    /// mail, read, flagged, moved). Not -shm, which readers touch too.
+    /// mail, read, flagged, moved). Not -shm, which readers touch too. Nil while new rows still wait for their file:
+    /// Mail writes the row first and the .emlx after, and the file landing changes neither.
     public func changeToken() -> String? {
-        guard let data = try? storeRoot().appendingPathComponent("MailData") else { return nil }
+        lock.lock(); let waiting = !misses.isEmpty; lock.unlock()
+        guard !waiting, let data = try? storeRoot().appendingPathComponent("MailData") else { return nil }
         return ["Envelope Index", "Envelope Index-wal"].map { name in
             let a = try? FileManager.default.attributesOfItem(atPath: data.appendingPathComponent(name).path)
             let size = (a?[.size] as? NSNumber)?.int64Value ?? -1
