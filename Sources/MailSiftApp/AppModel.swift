@@ -33,6 +33,8 @@ final class AppModel {
     @ObservationIgnored private var watcher: AppleMailWatcher?
     /// Mail changed while an index run was going; run again when it ends.
     @ObservationIgnored private var changedWhileIndexing = false
+    /// A run synced while the model was still loading and left embedding for later.
+    @ObservationIgnored private var embedDeferred = false
     @ObservationIgnored private var indexTask: Task<Void, Never>?
     @ObservationIgnored private var modelTask: Task<CoreMLEmbedder?, Never>?
 
@@ -143,6 +145,7 @@ final class AppModel {
                     }
                 }
                 model = .loaded
+                if let library { mailChanged(library) }
                 return embedder
             } catch {
                 model = .failed(error.localizedDescription)
@@ -175,14 +178,19 @@ final class AppModel {
             }
             do {
                 changed = try await lib.sync(force: force, progress: report)
-                guard changed else { return }
+                guard changed || embedDeferred else { return }
                 // New mail is listable now; don't hold the lists until embedding finishes.
-                indexRevision += 1
-                // Polled rather than awaited so that a resync during the model download can cancel this run.
-                while case .loading = model { try await Task.sleep(for: .milliseconds(250)) }
-                guard case .loaded = model, let embedder = await modelTask?.value else { return }
+                if changed { indexRevision += 1 }
+                // Syncs don't wait for the model (minutes when the system recompiles it); once loaded it starts a run
+                // that embeds what came in meanwhile.
+                guard case .loaded = model, let embedder = await modelTask?.value else {
+                    if case .loading = model { embedDeferred = true }
+                    return
+                }
+                changed = true
                 lib.setEmbedder(embedder)
                 try await lib.embedPending(progress: report)
+                embedDeferred = false
             } catch {
                 // Status already carries the failure or cancellation.
             }
