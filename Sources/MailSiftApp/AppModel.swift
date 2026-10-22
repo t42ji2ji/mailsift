@@ -30,6 +30,9 @@ final class AppModel {
     private(set) var indexRevision = 0
     @ObservationIgnored private var indexing = false
     @ObservationIgnored private var autoSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var watcher: AppleMailWatcher?
+    /// Mail changed while an index run was going; run again when it ends.
+    @ObservationIgnored private var changedWhileIndexing = false
     @ObservationIgnored private var indexTask: Task<Void, Never>?
     @ObservationIgnored private var modelTask: Task<CoreMLEmbedder?, Never>?
 
@@ -55,6 +58,9 @@ final class AppModel {
             loadModel()
             runIndex(lib)
             startAutoSync(lib)
+            watcher = AppleMailWatcher(source: source) {
+                Task { @MainActor in self.mailChanged(lib) }
+            }
         } catch {
             readiness = .failed(error.localizedDescription)
         }
@@ -91,7 +97,12 @@ final class AppModel {
         }
     }
 
-    /// New mail arrives through Mail.app; pick it up every minute (sync only reads what changed).
+    private func mailChanged(_ lib: MailLibrary) {
+        if indexing { changedWhileIndexing = true } else { runIndex(lib) }
+    }
+
+    /// New mail arrives through Mail.app; the watcher picks it up as it lands, this every minute in case it misses
+    /// (sync only reads what changed).
     private func startAutoSync(_ lib: MailLibrary) {
         autoSyncTask?.cancel()
         autoSyncTask = Task {
@@ -157,6 +168,10 @@ final class AppModel {
             defer {
                 indexing = false
                 if changed { indexRevision += 1 }
+                if changedWhileIndexing {
+                    changedWhileIndexing = false
+                    Task { runIndex(lib) }
+                }
             }
             do {
                 changed = try await lib.sync(force: force, progress: report)
