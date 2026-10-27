@@ -46,6 +46,16 @@ final class SearchModel {
     private(set) var thread: [ParsedMessage] = []
     private(set) var actionRunning = false
     var actionError: String?
+    /// The last message moved to Trash or Spam, offered back in a pill under the list for a few seconds.
+    private(set) var undo: Undo?
+    @ObservationIgnored private var undoTimer: Task<Void, Never>?
+
+    struct Undo: Equatable {
+        let meta: MessageMeta
+        let action: MailAction
+        /// Set while restoring, or when the restore failed.
+        var status: String?
+    }
 
     @ObservationIgnored private let app: AppModel
     @ObservationIgnored private var searchTask: Task<Void, Never>?
@@ -347,6 +357,9 @@ final class SearchModel {
         }
         switch action {
         case .trash, .junk:
+            if let meta = (hits + rows.values.joined() + unread).first(where: { $0.id == id })?.meta ?? message?.meta {
+                offerUndo(Undo(meta: meta, action: action))
+            }
             hits.removeAll { $0.id == id }
             for b in rows.keys { rows[b]!.removeAll { $0.id == id } }
             unread.removeAll { $0.id == id }
@@ -362,6 +375,53 @@ final class SearchModel {
             if message?.meta.id == id { update(&message!.meta) }
             if [.flag, .unflag, .markUnread].contains(action) { loadRecent() }  // moves it between the sections
             if action == .markRead, id != selection { settle(id) }  // read after another was opened
+        }
+    }
+
+    private func offerUndo(_ u: Undo?, for seconds: Int = 8) {
+        undo = u
+        undoTimer?.cancel()
+        guard u != nil else { return }
+        undoTimer = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            if !Task.isCancelled { undo = nil }
+        }
+    }
+
+    /// Moves the message in the pill back to the inbox. Mail gives the moved copy a new id, so it is found again
+    /// in Trash (or Spam) by account, sender, subject and date, waiting a moment for Mail to write it there.
+    func undoLast() {
+        guard var u = undo, u.status == nil, let lib = app.library else { return }
+        undoTimer?.cancel()
+        u.status = "復原中…"
+        undo = u
+        let m = u.meta
+        let role: MailboxRole = u.action == .junk ? .spam : .trash
+        Task {
+            for _ in 0..<10 {
+                let copy = await Task.detached {
+                    lib.mailbox(role).first {
+                        $0.mailbox.account == m.mailbox.account && $0.senderAddress == m.senderAddress
+                            && $0.subject == m.subject && abs($0.date.timeIntervalSince(m.date)) < 1
+                    }
+                }.value
+                if let copy {
+                    do {
+                        let report = try await lib.perform(.restore, ids: [copy.id])
+                        if let why = report.failed[copy.id] { u.status = why; offerUndo(u, for: 5); return }
+                    } catch {
+                        u.status = Self.describe(error)
+                        offerUndo(u, for: 5)
+                        return
+                    }
+                    offerUndo(nil)
+                    app.resync()  // restored mail returns to the index
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            u.status = role == .spam ? "在垃圾郵件裡找不到這封信" : "在垃圾桶裡找不到這封信"
+            offerUndo(u, for: 5)
         }
     }
 

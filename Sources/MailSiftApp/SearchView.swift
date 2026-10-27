@@ -20,6 +20,14 @@ struct SearchView: View {
                 }
                 .frame(minWidth: 320, idealWidth: 400, maxWidth: narrow ? .infinity : 460)
                 .background(Theme.paper)
+                .overlay(alignment: .bottom) {
+                    if let undo = model.undo {
+                        UndoPill(undo: undo) { model.undoLast() }
+                            .padding(.bottom, 16)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeOut(duration: 0.2), value: model.undo)
 
                 if !narrow {
                     Rectangle().fill(Theme.hairline).frame(width: 1)
@@ -389,6 +397,35 @@ private struct HitList: View {
     /// A message moving between sections (unread dropping into 今天) is a new row, not the old one carried along
     /// mid-animation with its selection.
     private func rowID(_ section: DateSection, _ hit: SearchHit) -> String { "\(section.id)/\(hit.id)" }
+}
+
+/// "已移到垃圾桶 · 復原" floating under the list after a message is trashed or marked as spam.
+private struct UndoPill: View {
+    let undo: SearchModel.Undo
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(undo.status ?? (undo.action == .junk ? "已標為垃圾郵件" : "已移到垃圾桶"))
+                .foregroundStyle(Theme.paper.opacity(0.85))
+            if undo.status == nil {
+                Button(action: action) {
+                    Text("復原").fontWeight(.semibold).foregroundStyle(Theme.paper).underline(hovering)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut("z", modifiers: .command)
+                .help("移回收件匣（⌘Z）")
+                .onHover { hovering = $0 }
+                .pointerStyle(.link)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Theme.ink, in: Capsule())
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+    }
 }
 
 struct Message: View {
