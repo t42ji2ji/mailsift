@@ -407,6 +407,10 @@ private struct UndoPill: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            if undo.done {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 14)).symbolRenderingMode(.palette).foregroundStyle(.white, .green)
+                    .padding(.trailing, -6)
+            }
             Text(undo.status ?? (undo.action == .junk ? "已標為垃圾郵件" : "已移到垃圾桶"))
                 .foregroundStyle(Theme.paper.opacity(0.85))
             if undo.status == nil {

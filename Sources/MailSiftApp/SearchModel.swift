@@ -49,12 +49,15 @@ final class SearchModel {
     /// The last message moved to Trash or Spam, offered back in a pill under the list for a few seconds.
     private(set) var undo: Undo?
     @ObservationIgnored private var undoTimer: Task<Void, Never>?
+    /// Messages already off the list while Mail is still moving them; reloads leave them out.
+    @ObservationIgnored private var removing: [Int64: Task<String?, Never>] = [:]
 
     struct Undo: Equatable {
         let meta: MessageMeta
         let action: MailAction
-        /// Set while restoring, or when the restore failed.
+        /// Set while restoring, when it is done, or when the move or the restore failed.
         var status: String?
+        var done = false
     }
 
     @ObservationIgnored private let app: AppModel
@@ -157,6 +160,7 @@ final class SearchModel {
                 (lib.recent(.unread, limit: limit, accounts: only, category: category), lib.count(.unread, accounts: only, category: category))
             }.value
             guard category == self.category else { return }
+            fresh.removeAll { removing[$0.id] != nil }
             keepOpen(&fresh, from: unread)
             if fresh.map(\.meta) != unread.map(\.meta) { unread = fresh }
             if count != unreadCount { unreadCount = count }
@@ -188,6 +192,7 @@ final class SearchModel {
                            category: category)
             }.value
             guard category == self.category else { return }
+            fresh.removeAll { removing[$0.id] != nil }
             if box == .unread { keepOpen(&fresh, from: rows[box, default: []]) }
             if fresh.map(\.meta) != rows[box]?.map(\.meta) { rows[box] = fresh }
             if box == .flagged || fresh.count < limit { exhausted.insert(box) } else { exhausted.remove(box) }
@@ -226,7 +231,7 @@ final class SearchModel {
             guard category == self.category else { return }
             if next.count < page { exhausted.insert(box) }
             let seen = Set(rows[box, default: []].map(\.id))
-            rows[box, default: []] += next.filter { !seen.contains($0.id) }
+            rows[box, default: []] += next.filter { !seen.contains($0.id) && removing[$0.id] == nil }
         }
     }
 
@@ -256,7 +261,7 @@ final class SearchModel {
             do {
                 let result = try await lib.search(text, filter: filter, limit: 100)
                 guard !Task.isCancelled, text == query else { return }
-                hits = result
+                hits = result.filter { removing[$0.id] == nil }
             } catch {
                 guard !Task.isCancelled, text == query else { return }
                 hits = []
@@ -310,6 +315,7 @@ final class SearchModel {
 
     func perform(_ action: MailAction, on id: Int64? = nil) {
         guard let id = id ?? selection, let lib = app.library, !actionRunning else { return }
+        if action == .trash || action == .junk { return remove(action, id, lib) }
         actionRunning = true
         actionError = nil
         Task {
@@ -323,6 +329,31 @@ final class SearchModel {
                 apply(action, to: id)
             } catch {
                 actionError = Self.describe(error)
+            }
+        }
+    }
+
+    /// Trash and Spam take the message off the list at once and offer it back; Mail moves it in the background
+    /// (a Gmail delete can take seconds), and if that fails the message returns to the list.
+    private func remove(_ action: MailAction, _ id: Int64, _ lib: MailLibrary) {
+        guard removing[id] == nil,
+              let meta = (hits + rows.values.joined() + unread).first(where: { $0.id == id })?.meta ?? message?.meta else { return }
+        actionError = nil
+        let move = Task { () -> String? in
+            do { return try await lib.perform(action, ids: [id]).failed[id] } catch { return Self.describe(error) }
+        }
+        removing[id] = move
+        apply(action, to: id)
+        offerUndo(Undo(meta: meta, action: action))
+        Task {
+            let why = await move.value
+            removing[id] = nil
+            if let why {
+                if undo == nil || undo?.meta.id == id { offerUndo(Undo(meta: meta, action: action, status: why), for: 5) }
+                loadRecent()  // it never left
+            } else {
+                loadUnread(lib)  // its count
+                app.refreshStatus()
             }
         }
     }
@@ -357,15 +388,10 @@ final class SearchModel {
         }
         switch action {
         case .trash, .junk:
-            if let meta = (hits + rows.values.joined() + unread).first(where: { $0.id == id })?.meta ?? message?.meta {
-                offerUndo(Undo(meta: meta, action: action))
-            }
             hits.removeAll { $0.id == id }
             for b in rows.keys { rows[b]!.removeAll { $0.id == id } }
             unread.removeAll { $0.id == id }
-            if let lib = app.library { loadUnread(lib) }  // its count
             if selection == id { selection = nil }
-            app.refreshStatus()
         default:
             if let i = hits.firstIndex(where: { $0.id == id }) { update(&hits[i].meta) }
             for b in rows.keys {
@@ -396,7 +422,9 @@ final class SearchModel {
         undo = u
         let m = u.meta
         let role: MailboxRole = u.action == .junk ? .spam : .trash
+        let move = removing[m.id]
         Task {
+            if let move, await move.value != nil { return }  // it never left; the failure takes over the pill
             for _ in 0..<20 {
                 if let id = try? await Task.detached(operation: { try lib.source.locate(m, in: role) }).value {
                     do {
@@ -408,6 +436,7 @@ final class SearchModel {
                         return
                     }
                     u.status = "已移回收件匣"
+                    u.done = true
                     offerUndo(u, for: 2)
                     app.resync()  // restored mail returns to the index
                     return
