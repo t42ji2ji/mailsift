@@ -388,8 +388,7 @@ final class SearchModel {
         }
     }
 
-    /// Moves the message in the pill back to the inbox. Mail gives the moved copy a new id, so it is found again
-    /// in Trash (or Spam) by account, sender, subject and date, waiting a moment for Mail to write it there.
+    /// Moves the message in the pill back to the inbox, waiting a moment for Mail to write the moved copy.
     func undoLast() {
         guard var u = undo, u.status == nil, let lib = app.library else { return }
         undoTimer?.cancel()
@@ -398,27 +397,22 @@ final class SearchModel {
         let m = u.meta
         let role: MailboxRole = u.action == .junk ? .spam : .trash
         Task {
-            for _ in 0..<10 {
-                let copy = await Task.detached {
-                    lib.mailbox(role).first {
-                        $0.mailbox.account == m.mailbox.account && $0.senderAddress == m.senderAddress
-                            && $0.subject == m.subject && abs($0.date.timeIntervalSince(m.date)) < 1
-                    }
-                }.value
-                if let copy {
+            for _ in 0..<20 {
+                if let id = try? await Task.detached(operation: { try lib.source.locate(m, in: role) }).value {
                     do {
-                        let report = try await lib.perform(.restore, ids: [copy.id])
-                        if let why = report.failed[copy.id] { u.status = why; offerUndo(u, for: 5); return }
+                        let report = try await lib.perform(.restore, ids: [id])
+                        if let why = report.failed[id] { u.status = why; offerUndo(u, for: 5); return }
                     } catch {
                         u.status = Self.describe(error)
                         offerUndo(u, for: 5)
                         return
                     }
-                    offerUndo(nil)
+                    u.status = "已移回收件匣"
+                    offerUndo(u, for: 2)
                     app.resync()  // restored mail returns to the index
                     return
                 }
-                try? await Task.sleep(for: .milliseconds(500))
+                try? await Task.sleep(for: .milliseconds(250))
             }
             u.status = role == .spam ? "在垃圾郵件裡找不到這封信" : "在垃圾桶裡找不到這封信"
             offerUndo(u, for: 5)

@@ -170,6 +170,8 @@ public protocol MailSource: Sendable {
     func listMessages() throws -> [MessageMeta]
     /// Messages in mailboxes of `role` (.trash, .spam), newest first. Metadata only; these aren't indexed.
     func listMailbox(_ role: MailboxRole) throws -> [MessageMeta]
+    /// The id `meta` has now that it sits in a mailbox of `role`: moving a message gives it a new id.
+    func locate(_ meta: MessageMeta, in role: MailboxRole) throws -> Int64?
     /// Full parse of one message.
     func parse(_ meta: MessageMeta) throws -> ParsedMessage
     /// A readable file with the attachment's content: Mail's own copy when it exists, otherwise decoded from the
@@ -192,6 +194,12 @@ public protocol MailSource: Sendable {
 }
 
 public extension MailSource {
+    func locate(_ meta: MessageMeta, in role: MailboxRole) throws -> Int64? {
+        try listMailbox(role).first {
+            $0.mailbox.account == meta.mailbox.account && $0.senderAddress == meta.senderAddress
+                && $0.subject == meta.subject && abs($0.date.timeIntervalSince(meta.date)) < 1
+        }?.id
+    }
     func signals(_ ids: [Int64]) throws -> [Int64: SourceSignals] { [:] }
     func correspondents() throws -> Set<String> { [] }
     func accounts() throws -> [String] { [] }

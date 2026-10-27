@@ -158,6 +158,26 @@ public final class AppleMailSource: MailSource, @unchecked Sendable {
         return try list { $0.role == role }
     }
 
+    /// One query on Mail's index rather than `list`: the moved copy's file may not be written yet.
+    public func locate(_ meta: MessageMeta, in role: MailboxRole) throws -> Int64? {
+        let db = try openIndex()
+        let ids = try mailboxes(db).filter { $0.value.role == role }.map { String($0.key) }
+        guard !ids.isEmpty else { return nil }
+        var found: Int64?
+        try db.query("""
+            select m.ROWID, m.subject_prefix, s.subject
+            from messages m
+            left join subjects s on s.ROWID = m.subject
+            left join addresses a on a.ROWID = m.sender
+            where m.deleted = 0 and m.mailbox in (\(ids.joined(separator: ",")))
+              and abs(m.date_received - ?) < 1 and lower(a.address) = ?
+            order by m.ROWID desc
+            """, [Int64(meta.date.timeIntervalSince1970), meta.senderAddress]) { r in
+            if found == nil, (r.text(1) ?? "") + (r.text(2) ?? "") == meta.subject { found = r.int(0) }
+        }
+        return found
+    }
+
     private func list(_ include: (AppleMailbox) -> Bool) throws -> [MessageMeta] {
         let db = try openIndex()
         let boxes = try mailboxes(db)

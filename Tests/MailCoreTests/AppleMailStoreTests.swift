@@ -85,6 +85,15 @@ final class AppleMailStoreTests: XCTestCase {
         return src
     }
 
+    func testLocateFindsTrashedMessageOnRealStore() throws {
+        let src = try realSource()
+        guard let m = try src.listMailbox(.trash).first else { throw XCTSkip("Trash is empty") }
+        let t0 = Date()
+        let id = try src.locate(m, in: .trash)
+        print("locate: \(String(format: "%.3f", Date().timeIntervalSince(t0))) s")
+        XCTAssertEqual(id, m.id)
+    }
+
     func testListMessagesOnRealStore() throws {
         let src = try realSource()
         let t0 = Date()
