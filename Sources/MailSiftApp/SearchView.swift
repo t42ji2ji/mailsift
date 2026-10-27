@@ -336,7 +336,7 @@ private struct HitList: View {
         Button(meta.isFlagged ? "移除旗標（S）" : "加旗標（S）") { model.perform(meta.isFlagged ? .unflag : .flag, on: meta.id) }
         Button("標為垃圾郵件") { model.perform(.junk, on: meta.id) }
         Divider()
-        Button("移到垃圾桶（#）") { model.perform(.trash, on: meta.id) }
+        Button("移到垃圾桶（#）", role: .destructive) { model.perform(.trash, on: meta.id) }
     }
 
     private func showAll(_ section: DateSection, opens box: BrowseBox) -> some View {
