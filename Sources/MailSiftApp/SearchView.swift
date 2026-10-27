@@ -293,6 +293,7 @@ private struct HitList: View {
                                     model.selection = hit.id
                                     focused = true
                                 }
+                                .contextMenu { menu(hit.meta) }
                         }
                         if let more = section.more, section.count > more.preview { showAll(section, opens: more.opens) }
                     }
@@ -322,6 +323,20 @@ private struct HitList: View {
         .padding(.horizontal, 10)
         .padding(.top, 14)
         .padding(.bottom, 4)
+    }
+
+    /// Acts on the right-clicked row without opening it, which would mark it read.
+    @ViewBuilder private func menu(_ meta: MessageMeta) -> some View {
+        Button("回覆（R）") { model.compose(.reply, on: meta.id) }
+        Button("全部回覆（⇧R）") { model.compose(.replyAll, on: meta.id) }
+        Button("轉寄（F）") { model.compose(.forward, on: meta.id) }
+        Divider()
+        Button("封存（E）") { model.perform(.archive, on: meta.id) }
+        Button(meta.isRead ? "標為未讀（U）" : "標為已讀（U）") { model.perform(meta.isRead ? .markUnread : .markRead, on: meta.id) }
+        Button(meta.isFlagged ? "移除旗標（S）" : "加旗標（S）") { model.perform(meta.isFlagged ? .unflag : .flag, on: meta.id) }
+        Button("標為垃圾郵件") { model.perform(.junk, on: meta.id) }
+        Divider()
+        Button("移到垃圾桶（#）") { model.perform(.trash, on: meta.id) }
     }
 
     private func showAll(_ section: DateSection, opens box: BrowseBox) -> some View {

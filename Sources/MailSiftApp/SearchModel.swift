@@ -289,17 +289,17 @@ final class SearchModel {
     /// Set by the main view: asks the assistant to draft a reply to this message.
     @ObservationIgnored var requestDraft: ((Int64) -> Void)?
 
-    /// Opens a reply/forward window in Mail for the open message.
-    func compose(_ kind: ComposeKind, body: String? = nil) {
-        guard let id = selection, let lib = app.library else { return }
+    /// Opens a reply/forward window in Mail for the open message, or for `id` (a row right-clicked in the list).
+    func compose(_ kind: ComposeKind, on id: Int64? = nil, body: String? = nil) {
+        guard let id = id ?? selection, let lib = app.library else { return }
         actionError = nil
         Task {
             do { try await lib.compose(kind, id: id, body: body) } catch { actionError = Self.describe(error) }
         }
     }
 
-    func perform(_ action: MailAction) {
-        guard let id = selection, let lib = app.library, !actionRunning else { return }
+    func perform(_ action: MailAction, on id: Int64? = nil) {
+        guard let id = id ?? selection, let lib = app.library, !actionRunning else { return }
         actionRunning = true
         actionError = nil
         Task {
@@ -351,7 +351,7 @@ final class SearchModel {
             for b in rows.keys { rows[b]!.removeAll { $0.id == id } }
             unread.removeAll { $0.id == id }
             if let lib = app.library { loadUnread(lib) }  // its count
-            selection = nil
+            if selection == id { selection = nil }
             app.refreshStatus()
         default:
             if let i = hits.firstIndex(where: { $0.id == id }) { update(&hits[i].meta) }
