@@ -207,6 +207,12 @@ private struct ConversationView<Subject: View>: View {
                 expanded = [open.meta.id, thread.last?.meta.id ?? open.meta.id]
                 proxy.scrollTo(open.meta.id, anchor: .top)
             }
+            // A reply that arrives while the conversation is open shows expanded at the bottom.
+            .onChange(of: thread.last?.meta.id) { _, last in
+                guard let last else { return }
+                expanded.insert(last)
+                withAnimation { proxy.scrollTo(last, anchor: .top) }
+            }
         }
     }
 

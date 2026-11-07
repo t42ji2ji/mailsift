@@ -80,7 +80,10 @@ struct SearchView: View {
         .padding(.trailing, 84)
         .padding(.top, 42)
         .padding(.bottom, 8)
-        .task(id: app.indexRevision) { model.loadRecent() }
+        .task(id: app.indexRevision) {
+            model.loadRecent()
+            model.refreshThread()
+        }
     }
 
     @ViewBuilder private var results: some View {

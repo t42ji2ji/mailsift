@@ -308,6 +308,15 @@ final class SearchModel {
         }
     }
 
+    /// Picks up new mail in the open conversation, such as a reply just sent from Mail.
+    func refreshThread() {
+        guard let id = selection, message != nil, let lib = app.library else { return }
+        Task {
+            let conversation = await Task.detached { (try? lib.thread(id)) ?? [] }.value
+            if selection == id, conversation.map(\.meta.id) != thread.map(\.meta.id) { thread = conversation }
+        }
+    }
+
     /// Set by the main view: asks the assistant to draft a reply to this message.
     @ObservationIgnored var requestDraft: ((Int64) -> Void)?
 
