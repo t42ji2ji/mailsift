@@ -79,8 +79,10 @@ enum MailScript {
         var lines = ["tell application \"Mail\"", "\tset m to «class mssg» id \(id) of \(source.reference)", "\tset r to \(make)"]
         if let body, !body.isEmpty {
             let literal = body.components(separatedBy: "\n").map { "\"" + escape($0) + "\"" }.joined(separator: " & return & ")
-            lines.append("\tdelay 0.3")
-            lines.append("\tset content of r to \(literal) & return & return & (content of r)")
+            // Mail fills in the quoted original a moment after the window opens; writing before that loses the body.
+            lines += ["\tset q to \"\"", "\trepeat 30 times", "\t\tdelay 0.1", "\t\tset q to content of r",
+                      "\t\tif q is not \"\" then exit repeat", "\tend repeat"]
+            lines.append("\tset content of r to \(literal) & return & return & q")
         }
         lines += ["\tactivate", "end tell"]
         return lines.joined(separator: "\n")

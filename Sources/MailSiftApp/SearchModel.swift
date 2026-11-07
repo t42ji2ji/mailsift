@@ -16,6 +16,8 @@ final class SearchModel {
     private(set) var unread: [SearchHit] = []
     private(set) var unreadCount = 0
     static let unreadPreview = 10
+    /// Unread mail loaded for the section, more than it previews: repeats of one notice fold into one row.
+    private static let unreadLoad = 200
     /// Inbox under the unread section: flagged mail pinned, then the rest. Each message appears once.
     var pinned: [SearchHit] { leavingOutUnread(rows[.flagged, default: []]) }
     var feed: [SearchHit] { leavingOutUnread(rows[.inbox, default: []]) }
@@ -51,6 +53,8 @@ final class SearchModel {
     @ObservationIgnored private var undoTimer: Task<Void, Never>?
     /// Messages already off the list while Mail is still moving them; reloads leave them out.
     @ObservationIgnored private var removing: [Int64: Task<String?, Never>] = [:]
+    /// Unread messages already off the unread section while Mail marks them read.
+    @ObservationIgnored private var reading: Set<Int64> = []
 
     struct Undo: Equatable {
         let meta: MessageMeta
@@ -152,7 +156,7 @@ final class SearchModel {
     private func loadUnread(_ lib: MailLibrary) {
         let only = shownAccounts
         let category = category
-        let limit = Self.unreadPreview
+        let limit = Self.unreadLoad
         pendingLoads += 1
         Task {
             defer { pendingLoads -= 1 }
@@ -161,6 +165,9 @@ final class SearchModel {
             }.value
             guard category == self.category else { return }
             fresh.removeAll { removing[$0.id] != nil }
+            let loaded = fresh.count
+            fresh.removeAll { reading.contains($0.id) }
+            count -= loaded - fresh.count
             keepOpen(&fresh, from: unread)
             if fresh.map(\.meta) != unread.map(\.meta) { unread = fresh }
             if count != unreadCount { unreadCount = count }
@@ -192,7 +199,7 @@ final class SearchModel {
                            category: category)
             }.value
             guard category == self.category else { return }
-            fresh.removeAll { removing[$0.id] != nil }
+            fresh.removeAll { removing[$0.id] != nil || (box == .unread && reading.contains($0.id)) }
             if box == .unread { keepOpen(&fresh, from: rows[box, default: []]) }
             if fresh.map(\.meta) != rows[box]?.map(\.meta) { rows[box] = fresh }
             if box == .flagged || fresh.count < limit { exhausted.insert(box) } else { exhausted.remove(box) }
@@ -330,6 +337,26 @@ final class SearchModel {
             } catch {
                 actionError = Self.describe(error)
             }
+        }
+    }
+
+    /// Marks a folded group of unread mail read: it leaves the unread section at once while Mail catches up.
+    func markRead(_ ids: [Int64]) {
+        guard let lib = app.library, !ids.isEmpty else { return }
+        let group = Set(ids)
+        actionError = nil
+        reading.formUnion(group)
+        unread.removeAll { group.contains($0.id) }
+        rows[.unread]?.removeAll { group.contains($0.id) }
+        unreadCount = max(unreadCount - ids.count, 0)
+        Task {
+            do {
+                if let why = try await lib.perform(.markRead, ids: ids).failed.values.first { actionError = why }
+            } catch {
+                actionError = Self.describe(error)
+            }
+            reading.subtract(group)
+            loadRecent()
         }
     }
 

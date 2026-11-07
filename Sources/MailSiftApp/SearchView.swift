@@ -94,7 +94,7 @@ struct SearchView: View {
                 if model.box != .inbox {
                     VStack(spacing: 0) {
                         backRow
-                        HitList(model: model, sections: DateSection.group(model.recent), showMatch: false)
+                        HitList(model: model, sections: DateSection.group(model.recent, fold: model.box == .unread), showMatch: false)
                     }
                     .background(Theme.paper)
                     .id(model.box)
@@ -152,7 +152,7 @@ struct SearchView: View {
     /// Unread mail on top, then flagged mail pinned (its first rows), then the rest of the inbox by date.
     private var inboxSections: [DateSection] {
         let unread = model.unread.isEmpty ? [] : [DateSection(title: "未讀", hits: model.unread, total: model.unreadCount,
-                                                                    more: (SearchModel.unreadPreview, .unread))]
+                                                                    more: (SearchModel.unreadPreview, .unread), fold: true)]
         let pinned = model.pinned.isEmpty ? [] : [DateSection(title: "旗標", hits: model.pinned, more: (3, .flagged))]
         return unread + pinned + DateSection.group(model.feed)
     }
@@ -251,11 +251,13 @@ struct DateSection: Identifiable {
     var total: Int?
     /// Shows its first `preview` rows and a "顯示全部" that opens the whole box.
     var more: (preview: Int, opens: BrowseBox)?
+    /// Mail from one sender with one subject folds into a single row (unread mail: repeated notices).
+    var fold = false
     var id: String { title }
     var count: Int { max(total ?? 0, hits.count) }
 
     /// 今天 / 昨天 / 本週 / 本月 / 更早, newest first, empty groups dropped.
-    static func group(_ hits: [SearchHit], now: Date = .now) -> [DateSection] {
+    static func group(_ hits: [SearchHit], fold: Bool = false, now: Date = .now) -> [DateSection] {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let bounds: [(String, Date)] = [
@@ -270,7 +272,7 @@ struct DateSection: Identifiable {
             let i = bounds.firstIndex { hit.meta.date >= $0.1 } ?? bounds.count - 1
             buckets[i].append(hit)
         }
-        return zip(bounds, buckets).compactMap { $1.isEmpty ? nil : DateSection(title: $0.0, hits: $1) }
+        return zip(bounds, buckets).compactMap { $1.isEmpty ? nil : DateSection(title: $0.0, hits: $1, fold: fold) }
     }
 }
 
@@ -283,9 +285,44 @@ private struct HitList: View {
     /// False while covered by another box: it keeps its place but takes no focus or keys.
     var active = true
     @FocusState private var focused: Bool
+    /// Folded groups opened to show their messages, by group key.
+    @State private var expanded: Set<String> = []
 
-    private func visible(_ section: DateSection) -> [SearchHit] {
-        section.more.map { Array(section.hits.prefix($0.preview)) } ?? section.hits
+    /// A row of the list: one message, or several from one sender with one subject under the newest of them.
+    private enum Entry: Identifiable {
+        case one(SearchHit)
+        case group(String, [SearchHit])
+        var id: String {
+            switch self {
+            case .one(let hit): "\(hit.id)"
+            case .group(let key, _): key
+            }
+        }
+        var hits: [SearchHit] {
+            switch self {
+            case .one(let hit): [hit]
+            case .group(_, let hits): hits
+            }
+        }
+    }
+
+    private func entries(_ section: DateSection) -> [Entry] {
+        guard section.fold else { return section.hits.map(Entry.one) }
+        func key(_ m: MessageMeta) -> String { m.senderAddress.lowercased() + "\n" + m.subject }
+        var members: [String: [SearchHit]] = [:]
+        for hit in section.hits { members[key(hit.meta), default: []].append(hit) }
+        var placed = Set<String>()
+        return section.hits.compactMap { hit in
+            let k = key(hit.meta)
+            guard let group = members[k], group.count > 1 else { return .one(hit) }
+            return placed.insert(k).inserted ? .group(k, group) : nil
+        }
+    }
+
+    /// Previews count a folded group as one row.
+    private func visible(_ section: DateSection) -> [Entry] {
+        let all = entries(section)
+        return section.more.map { Array(all.prefix($0.preview)) } ?? all
     }
 
     var body: some View {
@@ -294,16 +331,27 @@ private struct HitList: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(sections) { section in
                         if !section.title.isEmpty { header(section) }
-                        ForEach(visible(section)) { hit in
-                            HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch)
-                                .id(rowID(section, hit))
-                                .onTapGesture {
-                                    model.selection = hit.id
-                                    focused = true
+                        let shown = visible(section)
+                        ForEach(shown) { entry in
+                            switch entry {
+                            case .one(let hit): row(section, hit)
+                            case .group(let key, let hits):
+                                GroupRow(hits: hits, open: expanded.contains(key)) {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        if expanded.remove(key) == nil { expanded.insert(key) }
+                                    }
+                                } markRead: {
+                                    model.markRead(hits.filter { !$0.meta.isRead }.map(\.id))
                                 }
-                                .contextMenu { menu(hit.meta) }
+                                .id("\(section.id)/\(key)")
+                                if expanded.contains(key) {
+                                    ForEach(hits) { row(section, $0).padding(.leading, 16) }
+                                }
+                            }
                         }
-                        if let more = section.more, section.count > more.preview { showAll(section, opens: more.opens) }
+                        if let more = section.more, section.count > shown.reduce(0, { $0 + $1.hits.count }) {
+                            showAll(section, opens: more.opens)
+                        }
                     }
                     if !showMatch { Color.clear.frame(height: 1).onAppear { model.loadMore() } }
                 }
@@ -318,6 +366,16 @@ private struct HitList: View {
             .onKeyPress(.upArrow) { move(-1, proxy) }
             .onKeyPress(characters: .init(charactersIn: "jkesu#rRf")) { press in shortcut(press, proxy) }
         }
+    }
+
+    private func row(_ section: DateSection, _ hit: SearchHit) -> some View {
+        HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch)
+            .id(rowID(section, hit))
+            .onTapGesture {
+                model.selection = hit.id
+                focused = true
+            }
+            .contextMenu { menu(hit.meta) }
     }
 
     private func header(_ section: DateSection) -> some View {
@@ -385,10 +443,17 @@ private struct HitList: View {
     }
 
     private func move(_ step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
-        let rows = sections.flatMap { s in visible(s).map { (s, $0) } }
+        // A closed group is one stop, its newest message; landing there opens the group.
+        let rows = sections.flatMap { s in
+            visible(s).flatMap { e -> [(DateSection, SearchHit, String?)] in
+                guard case .group(let key, let hits) = e else { return e.hits.map { (s, $0, nil) } }
+                return expanded.contains(key) ? hits.map { (s, $0, nil) } : [(s, hits[0], key)]
+            }
+        }
         guard !rows.isEmpty else { return .ignored }
         let current = rows.firstIndex { $0.1.id == model.selection } ?? (step > 0 ? -1 : rows.count)
         let next = min(max(current + step, 0), rows.count - 1)
+        if let key = rows[next].2 { expanded.insert(key) }
         model.selection = rows[next].1.id
         proxy.scrollTo(rowID(rows[next].0, rows[next].1))
         return .handled
@@ -494,6 +559,83 @@ private struct HitRow: View {
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+    }
+}
+
+/// Mail from one sender with one subject (a bank's login notices), folded into one row that opens into the messages.
+private struct GroupRow: View {
+    let hits: [SearchHit]
+    let open: Bool
+    let toggle: () -> Void
+    let markRead: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        let newest = hits[0].meta
+        let unread = hits.filter { !$0.meta.isRead }.count
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(unread > 0 ? Theme.ink : Color.clear)
+                .frame(width: 6, height: 6)
+                .padding(.top, 6)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(Fmt.sender(newest))
+                        .font(.system(size: 13, weight: unread > 0 ? .bold : .medium))
+                        .lineLimit(1)
+                    Text(Fmt.count(hits.count))
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Theme.muted)
+                        .padding(.horizontal, 6)
+                        .frame(height: 16)
+                        .background(Theme.hover, in: Capsule())
+                    Spacer(minLength: 6)
+                    Text(Fmt.short(newest.date))
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(Theme.muted)
+                }
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.muted)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                    Text(newest.subject.isEmpty ? "（無主旨）" : newest.subject)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    if unread > 0 { MarkAllRead(count: unread, action: markRead) }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(hovering ? Theme.fill : .clear, in: RoundedRectangle(cornerRadius: Theme.radius))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help(open ? "收起" : "展開這 \(hits.count) 封")
+        .onTapGesture(perform: toggle)
+    }
+}
+
+private struct MarkAllRead: View {
+    let count: Int
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("全部已讀")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.ink)
+                .padding(.horizontal, 8)
+                .frame(height: 20)
+                .background(hovering ? Theme.selected : Theme.hover, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .pointerStyle(.link)
+        .help("這 \(count) 封都標為已讀")
     }
 }
 
