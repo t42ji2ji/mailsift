@@ -36,8 +36,7 @@ final class Searcher: @unchecked Sendable {
 
         var semantic: [Int64] = []
         if let embedder {
-            // With the English forms too: the model reads 帳單 close to 帳戶 and misses English receipts.
-            let vector = try await embedder.embedQuery(([query] + groups.flatMap { $0.dropFirst() }).joined(separator: " "))
+            let vector = try await embedder.embedQuery(([query] + SearchTerms.translationsForMeaning(query)).joined(separator: " "))
             semantic = try nearest(vector, allowed: try store.ids(matching: filter), limit: Self.candidates)
         }
 
@@ -161,22 +160,98 @@ final class Searcher: @unchecked Sendable {
 /// Common Chinese mail words also look for their English forms, since much of the mail they describe (bills, orders,
 /// bookings) arrives in English.
 public enum SearchTerms {
-    private static let translations: [String: [String]] = [
-        "帳單": ["bill", "invoice", "receipt", "statement"], "賬單": ["bill", "invoice", "receipt", "statement"],
-        "收據": ["receipt"], "訂單": ["order"], "退款": ["refund"], "付款": ["payment"], "扣款": ["payment"],
-        "訂閱": ["subscription"], "續訂": ["renew"], "機票": ["flight"], "航班": ["flight"],
-        "訂位": ["booking", "reservation"], "訂房": ["booking", "reservation", "hotel"], "飯店": ["hotel"],
-        "密碼": ["password"], "驗證碼": ["verification"], "面試": ["interview"], "會議": ["meeting"],
-        "邀請": ["invitation", "invite"], "出貨": ["shipped", "shipping"], "包裹": ["package", "delivery"],
-        "合約": ["contract", "agreement"], "履歷": ["resume"],
+    /// Words of the same meaning in mail, Chinese and English. A Chinese word also looks for the other words of its
+    /// row; an English word looks for the Chinese ones (its English neighbors are often wider: "receipt" is not a
+    /// "statement"). English entries match as substrings, so a stem covers its forms ("verif": verify, verification).
+    private static let pairs: [(zh: [String], en: [String])] = [
+        // Money
+        (["帳單", "賬單", "月結單"], ["bill", "statement", "invoice", "receipt"]),
+        (["發票"], ["invoice"]),
+        (["收據"], ["receipt"]),
+        (["付款", "繳費", "繳款", "扣款"], ["payment", "paid"]),
+        (["退款"], ["refund"]),
+        (["轉帳", "匯款"], ["transfer", "remittance"]),
+        (["交易"], ["transaction"]),
+        (["信用卡"], ["credit card"]),
+        (["薪資", "薪水"], ["salary", "payroll", "payslip"]),
+        (["報稅", "稅單", "所得稅"], ["tax"]),
+        (["保險", "保單"], ["insurance"]),
+        (["捐款"], ["donation"]),
+        (["報價"], ["quote", "quotation"]),
+        // Shopping
+        (["訂單", "訂購", "購買"], ["order", "purchase"]),
+        (["出貨", "寄出"], ["shipped", "shipping", "dispatched"]),
+        (["包裹", "物流", "配送", "到貨"], ["package", "parcel", "deliver"]),
+        (["退貨"], ["return"]),
+        (["優惠", "折扣"], ["discount", "promo", "coupon", "sale"]),
+        (["會員"], ["membership", "member"]),
+        (["點數", "紅利"], ["points", "rewards"]),
+        // Subscriptions and accounts
+        (["訂閱"], ["subscription", "subscribe"]),
+        (["續訂", "續約"], ["renew"]),
+        (["取消", "退訂"], ["cancel", "unsubscribe"]),
+        (["到期", "過期"], ["expir"]),
+        (["密碼"], ["password"]),
+        (["重設"], ["reset"]),
+        (["驗證碼", "驗證"], ["verif", "one-time code"]),
+        (["登入"], ["sign in", "sign-in", "login", "log in"]),
+        (["帳號", "帳戶"], ["account"]),
+        (["安全", "異常"], ["security", "suspicious", "unusual"]),
+        (["歡迎"], ["welcome"]),
+        (["確認"], ["confirm"]),
+        (["提醒"], ["reminder"]),
+        // Travel
+        (["機票", "航班"], ["flight"]),
+        (["登機"], ["boarding"]),
+        (["行程"], ["itinerary", "trip"]),
+        (["訂位", "預訂", "訂房"], ["booking", "reservation"]),
+        (["飯店", "住宿"], ["hotel", "accommodation"]),
+        // Work
+        (["會議"], ["meeting"]),
+        (["邀請"], ["invitation", "invite"]),
+        (["面試"], ["interview"]),
+        (["履歷"], ["resume"]),
+        (["錄取"], ["offer letter"]),
+        (["職缺", "工作機會"], ["job", "position"]),
+        (["合約", "合同"], ["contract", "agreement"]),
+        (["簽署"], ["signature", "e-sign"]),
+        (["報告"], ["report"]),
+        (["申請"], ["application"]),
+        (["活動"], ["event"]),
+        (["報名"], ["registration", "register"]),
+        (["課程"], ["course"]),
+        (["證書", "憑證"], ["certificate"]),
+        // Life
+        (["預約", "掛號"], ["appointment"]),
+        (["健康檢查", "健檢"], ["health check", "checkup"]),
+        (["電子報"], ["newsletter"]),
+        (["更新"], ["update"]),
     ]
 
-    /// Each word of the query with its English forms, if any.
+    private static let translations: [String: [String]] = {
+        var map: [String: [String]] = [:]
+        for (zh, en) in pairs {
+            for word in zh { map[word, default: []] += zh.filter { $0 != word } + en }
+            for word in en { map[word, default: []] += zh }
+        }
+        return map.mapValues { words in
+            var seen = Set<String>()
+            return words.filter { seen.insert($0).inserted }
+        }
+    }()
+
+    /// Each word of the query with the words of the same meaning, if any.
     public static func groups(_ query: String) -> [[String]] {
-        of(query).map { [$0] + (translations[$0] ?? []) }
+        of(query).map { [$0] + (translations[$0.lowercased()] ?? []) }
     }
 
-    /// The words of the query and their English forms, for highlighting.
+    /// Translations of the query's Chinese and Japanese words: the embedding model reads 帳單 close to 帳戶 and misses
+    /// mail written in English. English words are left to the model, which already finds Chinese mail for them.
+    static func translationsForMeaning(_ query: String) -> [String] {
+        groups(query).filter { $0[0].unicodeScalars.contains(where: isCJK) }.flatMap { $0.dropFirst() }
+    }
+
+    /// The words of the query and the words of the same meaning, for highlighting.
     public static func all(_ query: String) -> [String] {
         groups(query).flatMap { $0 }
     }
@@ -209,6 +284,14 @@ public enum SearchTerms {
             }
             flush()
             if terms.count == before { terms.append(word) }
+            // The segmenter splits some mail words (驗證碼 → 驗證 碼, 電子報 → 電子 報); join them back.
+            var i = before
+            while i < terms.count {
+                if let n = (2...3).reversed().first(where: { i + $0 <= terms.count && translations[terms[i..<i + $0].joined()] != nil }) {
+                    terms.replaceSubrange(i..<i + n, with: [terms[i..<i + n].joined()])
+                }
+                i += 1
+            }
         }
         var seen = Set<String>()
         terms = terms.filter { seen.insert($0.lowercased()).inserted }

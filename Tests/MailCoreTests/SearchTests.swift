@@ -17,7 +17,7 @@ final class SearchTests: XCTestCase {
 
     func testMultiWordQueryMatchesAnyTerm() async throws {
         let hits = try await library(embedder: nil).search("invoice lunch")
-        XCTAssertEqual(Set(hits.map(\.id)), [1, 3])
+        XCTAssertEqual(Set(hits.map(\.id)), [1, 2, 3], "2 is a 帳單, which invoice also looks for")
         XCTAssertTrue(hits.allSatisfy { $0.match == .keyword })
     }
 
@@ -31,7 +31,7 @@ final class SearchTests: XCTestCase {
         let hits = try await library().search("cloud invoice")
         XCTAssertEqual(hits.first?.id, 1)
         XCTAssertEqual(hits.first?.match, .both)
-        XCTAssertTrue(hits.dropFirst().allSatisfy { $0.match == .semantic })
+        XCTAssertTrue(hits.dropFirst().allSatisfy { $0.match == .semantic || $0.id == 2 }, "2 is a 帳單")
         XCTAssertGreaterThan(hits[0].score, hits.last!.score)
     }
 
@@ -54,7 +54,12 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(SearchTerms.of("for"), ["for"])
         XCTAssertEqual(SearchTerms.of("的"), ["的"])
         XCTAssertEqual(SearchTerms.of("github.com  Invoice invoice"), ["github.com", "Invoice"])
-        XCTAssertEqual(SearchTerms.groups("claude 帳單"), [["claude"], ["帳單", "bill", "invoice", "receipt", "statement"]])
+        XCTAssertEqual(SearchTerms.groups("claude 帳單"),
+                       [["claude"], ["帳單", "賬單", "月結單", "bill", "statement", "invoice", "receipt"]])
+        XCTAssertEqual(SearchTerms.groups("Receipt"), [["Receipt", "帳單", "賬單", "月結單", "收據"]], "English looks for the Chinese words")
+        XCTAssertEqual(SearchTerms.of("驗證碼"), ["驗證碼"], "split by the segmenter, joined back")
+        XCTAssertEqual(SearchTerms.of("我的電子報"), ["電子報"])
+        XCTAssertEqual(SearchTerms.translationsForMeaning("invoice 帳單"), ["賬單", "月結單", "bill", "statement", "invoice", "receipt"])
     }
 
     func testSnippetLeavesOutLinks() {
