@@ -23,7 +23,7 @@ final class SearchTests: XCTestCase {
 
     func testShortChineseTermFallsBackToSubstring() async throws {
         let hits = try await library(embedder: nil).search("帳單")
-        XCTAssertEqual(hits.map(\.id), [2])
+        XCTAssertEqual(hits.map(\.id), [2, 1], "the English invoice counts as a 帳單 too, after the one that says it")
         XCTAssertTrue(hits[0].snippet.contains("帳單"))
     }
 
@@ -54,6 +54,7 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(SearchTerms.of("for"), ["for"])
         XCTAssertEqual(SearchTerms.of("的"), ["的"])
         XCTAssertEqual(SearchTerms.of("github.com  Invoice invoice"), ["github.com", "Invoice"])
+        XCTAssertEqual(SearchTerms.groups("claude 帳單"), [["claude"], ["帳單", "bill", "invoice", "receipt", "statement"]])
     }
 
     func testSnippetLeavesOutLinks() {

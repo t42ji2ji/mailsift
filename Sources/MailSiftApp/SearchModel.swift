@@ -278,7 +278,7 @@ final class SearchModel {
         searchTask?.cancel()
         if text != query { newestFirst = false }
         query = text
-        terms = SearchTerms.of(text)
+        terms = SearchTerms.all(text)
         searchError = nil
         guard !text.isEmpty, let lib = app.library else {
             hits = []

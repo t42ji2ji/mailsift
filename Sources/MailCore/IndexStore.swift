@@ -518,11 +518,16 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
-    /// Mail holding any of `terms` (matched as substrings), best first. Each term weighs ln(1 + N / mail holding it), so
-    /// rare words decide and common ones ("for") barely count, and doubles in the subject or sender; ties newest first.
-    /// When every term has 3+ characters the trigram index narrows the scan (it has no positions, so a term's trigrams
-    /// are ANDed and LIKE checks the term itself); shorter terms, such as most Chinese words, scan every message.
-    func keywordSearch(_ terms: [String], filter: SearchFilter, limit: Int) throws -> [Int64] {
+    /// Mail holding any of `groups` (each a word and then its translations, matched as substrings), best first. A
+    /// translation counts only in the subject or sender: it names the kind of mail ("receipt"), and in long bodies it
+    /// turns up by chance ("bill" in "billion"). Each group
+    /// weighs ln(1 + N / mail holding it), so rare words decide and common ones ("for") barely count, and doubles in
+    /// the subject or sender; the sum is scaled by the share of the query's weight the mail holds, so mail with only
+    /// part of the query falls behind. Ties newest first. When every term has 3+ characters the trigram index narrows
+    /// the scan (it has no positions, so a term's trigrams are ANDed and LIKE checks the term itself); shorter terms,
+    /// such as most Chinese words, scan every message.
+    func keywordSearch(_ groups: [[String]], filter: SearchFilter, limit: Int) throws -> [Int64] {
+        let terms = groups.flatMap { $0 }
         guard !terms.isEmpty else { return [] }
         let inHeader = "(m.subject LIKE ? ESCAPE '\\' OR m.sender_name LIKE ? ESCAPE '\\' OR m.sender_address LIKE ? ESCAPE '\\')"
         let columns = terms.map { _ in inHeader + ", m.body LIKE ? ESCAPE '\\'" }.joined(separator: ", ")
@@ -536,18 +541,29 @@ final class IndexStore: @unchecked Sendable {
             var total = 0
             try db.query("SELECT count(*) FROM messages m WHERE \(clause.sql)", clause.args) { total = Int($0.int(0)) }
             // Per row, per term: 2 in the subject or sender, 1 in the body only, 0 absent.
-            var rows: [(id: Int64, date: Double, hits: [Int])] = []
+            var rows: [(id: Int64, date: Double, hits: [Double])] = []
             try db.query("SELECT m.id, m.date, \(columns) FROM \(from)\(clause.sql)",
                          termArgs + (indexed ? [.text(Self.trigramMatch(terms))] : []) + clause.args) { s in
-                let hits = terms.indices.map { s.int(Int32(2 + 2 * $0)) != 0 ? 2 : s.int(Int32(3 + 2 * $0)) != 0 ? 1 : 0 }
+                let termHits = terms.indices.map { s.int(Int32(2 + 2 * $0)) != 0 ? 2 : s.int(Int32(3 + 2 * $0)) != 0 ? 1 : 0 }
+                var start = 0
+                let hits = groups.map { group -> Double in
+                    defer { start += group.count }
+                    // The word itself anywhere; its translations only in the header, a little below the word.
+                    let word = Double(termHits[start])
+                    let translated = termHits[start + 1..<start + group.count].contains(2) ? 1.5 : 0
+                    return max(word, translated)
+                }
                 if hits.contains(where: { $0 > 0 }) { rows.append((s.int(0), s.double(1), hits)) }
             }
-            let weights = terms.indices.map { t -> Double in
-                let holding = rows.filter { $0.hits[t] > 0 }.count
+            let weights = groups.indices.map { g -> Double in
+                let holding = rows.filter { $0.hits[g] > 0 }.count
                 return holding == 0 ? 0 : log(1 + Double(max(total, holding)) / Double(holding))
             }
-            let scored = rows.map { row in
-                (row.id, row.date, zip(row.hits, weights).reduce(0.0) { $0 + Double($1.0) * $1.1 })
+            let totalWeight = weights.reduce(0, +)
+            let scored = rows.map { row -> (Int64, Double, Double) in
+                let sum = zip(row.hits, weights).reduce(0.0) { $0 + $1.0 * $1.1 }
+                let held = zip(row.hits, weights).reduce(0.0) { $0 + ($1.0 > 0 ? $1.1 : 0) }
+                return (row.id, row.date, totalWeight > 0 ? sum * held / totalWeight : 0)
             }
             return scored.sorted { $0.2 != $1.2 ? $0.2 > $1.2 : $0.1 > $1.1 }.prefix(limit).map(\.0)
         }

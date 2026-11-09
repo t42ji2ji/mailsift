@@ -29,13 +29,15 @@ final class Searcher: @unchecked Sendable {
     }
 
     func search(_ query: String, filter: SearchFilter, limit: Int, embedder: TextEmbedder?) async throws -> [SearchHit] {
-        let terms = SearchTerms.of(query)
-        guard !terms.isEmpty else { return [] }
-        let keyword = try store.keywordSearch(terms, filter: filter, limit: Self.candidates)
+        let groups = SearchTerms.groups(query)
+        guard !groups.isEmpty else { return [] }
+        let terms = groups.flatMap { $0 }
+        let keyword = try store.keywordSearch(groups, filter: filter, limit: Self.candidates)
 
         var semantic: [Int64] = []
         if let embedder {
-            let vector = try await embedder.embedQuery(query)
+            // With the English forms too: the model reads 帳單 close to 帳戶 and misses English receipts.
+            let vector = try await embedder.embedQuery(([query] + groups.flatMap { $0.dropFirst() }).joined(separator: " "))
             semantic = try nearest(vector, allowed: try store.ids(matching: filter), limit: Self.candidates)
         }
 
@@ -156,7 +158,29 @@ final class Searcher: @unchecked Sendable {
 /// The words of a query, for keyword search and highlighting. Spaces separate words; text in Chinese or Japanese is
 /// segmented further. The segmenter splits words it doesn't know into characters (訂位 → 訂 位), so runs of single
 /// characters are joined back. Particles and short English function words are dropped when other words remain.
+/// Common Chinese mail words also look for their English forms, since much of the mail they describe (bills, orders,
+/// bookings) arrives in English.
 public enum SearchTerms {
+    private static let translations: [String: [String]] = [
+        "帳單": ["bill", "invoice", "receipt", "statement"], "賬單": ["bill", "invoice", "receipt", "statement"],
+        "收據": ["receipt"], "訂單": ["order"], "退款": ["refund"], "付款": ["payment"], "扣款": ["payment"],
+        "訂閱": ["subscription"], "續訂": ["renew"], "機票": ["flight"], "航班": ["flight"],
+        "訂位": ["booking", "reservation"], "訂房": ["booking", "reservation", "hotel"], "飯店": ["hotel"],
+        "密碼": ["password"], "驗證碼": ["verification"], "面試": ["interview"], "會議": ["meeting"],
+        "邀請": ["invitation", "invite"], "出貨": ["shipped", "shipping"], "包裹": ["package", "delivery"],
+        "合約": ["contract", "agreement"], "履歷": ["resume"],
+    ]
+
+    /// Each word of the query with its English forms, if any.
+    public static func groups(_ query: String) -> [[String]] {
+        of(query).map { [$0] + (translations[$0] ?? []) }
+    }
+
+    /// The words of the query and their English forms, for highlighting.
+    public static func all(_ query: String) -> [String] {
+        groups(query).flatMap { $0 }
+    }
+
     private static let fillers: Set<String> = [
         "的", "了", "在", "是", "和", "與", "及", "或", "跟", "把", "被", "嗎", "呢", "吧", "a", "an", "the", "to", "for",
         "of", "in", "on", "at", "and", "or", "with", "from", "by", "is", "my", "me", "i",
