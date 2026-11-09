@@ -133,6 +133,26 @@ final class SearchModel {
         if relabel { app.resync() }
     }
 
+    /// Groupings for unread mail, first match wins; the rest folds by sender and subject.
+    private(set) var foldRules = FoldRule.load()
+
+    func saveFoldRules(_ rules: [FoldRule]) {
+        foldRules = rules
+        FoldRule.save(rules)
+    }
+
+    /// Adds a rule, or replaces the one with the same name; nil senders and subjects removes it.
+    func setFoldRule(_ rule: FoldRule?, named name: String) {
+        var rules = foldRules
+        if let i = rules.firstIndex(where: { $0.name == name }) {
+            if let rule { rules[i] = FoldRule(id: rules[i].id, name: rule.name, senders: rule.senders, subjects: rule.subjects) }
+            else { rules.remove(at: i) }
+        } else if let rule {
+            rules.append(rule)
+        }
+        saveFoldRules(rules)
+    }
+
     /// Reloads unread mail, Inbox, the pinned flagged mail and the open box, keeping as many rows as each already has.
     func loadRecent() {
         guard let lib = app.library else { return }

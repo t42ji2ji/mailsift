@@ -26,6 +26,7 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                 }
                 CategorySettings(search: search)
+                FoldRuleSettings(search: search)
                 VStack(alignment: .leading, spacing: 14) {
                     Eyebrow("帳號")
                     Text("MailSift 讀的是 Apple Mail 裡的帳號。在系統設定的「網際網路帳號」加入帳號並開啟「郵件」，下一次同步就會出現。")
@@ -196,6 +197,38 @@ private struct CategorySettings: View {
     private func update(_ change: (inout [MailCategory]) -> Void) {
         change(&items)
         search.saveCategories(items)
+    }
+}
+
+/// Groupings for unread mail; the assistant proposes them, here they can be read and deleted.
+private struct FoldRuleSettings: View {
+    let search: SearchModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Eyebrow("未讀分組")
+            Text("符合規則的未讀信收成一列，可以一次標為已讀。請 AI 助理整理未讀信，它會提議規則。")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if !search.foldRules.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(search.foldRules) { rule in
+                        HStack(spacing: 10) {
+                            Text(rule.name).font(.system(size: 13, weight: .medium))
+                            Text(rule.summary).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
+                            Spacer(minLength: 8)
+                            IconButton(symbol: "trash", help: "刪除") {
+                                search.saveFoldRules(search.foldRules.filter { $0.id != rule.id })
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .frame(height: 38)
+                    }
+                }
+                .hairlineBorder()
+            }
+        }
     }
 }
 

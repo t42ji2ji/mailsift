@@ -299,6 +299,8 @@ private struct AgentRow: View {
             .foregroundStyle(Theme.muted)
         case .proposal(let proposal):
             ProposalCard(proposal: proposal, itemID: item.id, model: model, openMessage: openMessage)
+        case .foldRule(let proposal):
+            FoldRuleCard(proposal: proposal, itemID: item.id, model: model)
         case .draft(let draft):
             DraftCard(draft: draft, itemID: item.id, model: model, openMessage: openMessage)
         case .error(let text):
@@ -425,6 +427,48 @@ private struct ProposalCard: View {
         case .failed(let message):
             Text(message).font(.system(size: 12)).foregroundStyle(Theme.muted).textSelection(.enabled)
         }
+    }
+}
+
+/// A grouping rule for the unread list: what it matches and how many unread messages it gathers now.
+private struct FoldRuleCard: View {
+    let proposal: AgentFoldRule
+    let itemID: Int
+    let model: AgentModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(proposal.remove ? "移除未讀分組" : "未讀分組").font(.system(size: 13, weight: .semibold))
+                Text(proposal.rule.name).font(.system(size: 13))
+                Spacer()
+                if !proposal.remove {
+                    Text("目前 \(Fmt.count(model.unreadMatching(proposal.rule))) 封")
+                        .font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.muted)
+                }
+            }
+            if !proposal.reason.isEmpty {
+                Text(proposal.reason).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            }
+            if !proposal.remove {
+                Text(proposal.rule.summary).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            switch proposal.state {
+            case .pending:
+                HStack(spacing: 8) {
+                    Button(proposal.remove ? "移除" : "套用") { model.applyFoldRule(itemID, true) }.buttonStyle(InkButtonStyle())
+                    Button("取消") { model.applyFoldRule(itemID, false) }.buttonStyle(LineButtonStyle())
+                }
+            case .applied:
+                Text(proposal.remove ? "已移除" : "已套用").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            case .cancelled:
+                Text("已取消").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(12)
+        .background(Theme.canvas, in: RoundedRectangle(cornerRadius: Theme.radius))
+        .hairlineBorder()
     }
 }
 

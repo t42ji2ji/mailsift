@@ -291,34 +291,39 @@ private struct HitList: View {
     /// Folded groups opened to show their messages, by group key.
     @State private var expanded: Set<String> = []
 
-    /// A row of the list: one message, or several from one sender with one subject under the newest of them.
+    /// A row of the list: one message, or several from one sender with one subject (or under one of the user's
+    /// fold rules, named) under the newest of them.
     private enum Entry: Identifiable {
         case one(SearchHit)
-        case group(String, [SearchHit])
+        case group(String, [SearchHit], name: String?)
         var id: String {
             switch self {
             case .one(let hit): "\(hit.id)"
-            case .group(let key, _): key
+            case .group(let key, _, _): key
             }
         }
         var hits: [SearchHit] {
             switch self {
             case .one(let hit): [hit]
-            case .group(_, let hits): hits
+            case .group(_, let hits, _): hits
             }
         }
     }
 
     private func entries(_ section: DateSection) -> [Entry] {
         guard section.fold else { return section.hits.map(Entry.one) }
-        func key(_ m: MessageMeta) -> String { m.senderAddress.lowercased() + "\n" + m.subject }
+        let rules = model.foldRules
+        func key(_ m: MessageMeta) -> String {
+            rules.first { $0.matches(m) }.map { "rule:\($0.id)" } ?? m.senderAddress.lowercased() + "\n" + m.subject
+        }
         var members: [String: [SearchHit]] = [:]
         for hit in section.hits { members[key(hit.meta), default: []].append(hit) }
         var placed = Set<String>()
         return section.hits.compactMap { hit in
             let k = key(hit.meta)
             guard let group = members[k], group.count > 1 else { return .one(hit) }
-            return placed.insert(k).inserted ? .group(k, group) : nil
+            let name = rules.first { "rule:\($0.id)" == k }?.name
+            return placed.insert(k).inserted ? .group(k, group, name: name) : nil
         }
     }
 
@@ -338,8 +343,8 @@ private struct HitList: View {
                         ForEach(shown) { entry in
                             switch entry {
                             case .one(let hit): row(section, hit)
-                            case .group(let key, let hits):
-                                GroupRow(hits: hits, open: expanded.contains(key)) {
+                            case .group(let key, let hits, let name):
+                                GroupRow(hits: hits, name: name, open: expanded.contains(key)) {
                                     withAnimation(.easeOut(duration: 0.2)) {
                                         if expanded.remove(key) == nil { expanded.insert(key) }
                                     }
@@ -449,7 +454,7 @@ private struct HitList: View {
         // A closed group is one stop, its newest message; landing there opens the group.
         let rows = sections.flatMap { s in
             visible(s).flatMap { e -> [(DateSection, SearchHit, String?)] in
-                guard case .group(let key, let hits) = e else { return e.hits.map { (s, $0, nil) } }
+                guard case .group(let key, let hits, _) = e else { return e.hits.map { (s, $0, nil) } }
                 return expanded.contains(key) ? hits.map { (s, $0, nil) } : [(s, hits[0], key)]
             }
         }
@@ -568,6 +573,8 @@ private struct HitRow: View {
 /// Mail from one sender with one subject (a bank's login notices), folded into one row that opens into the messages.
 private struct GroupRow: View {
     let hits: [SearchHit]
+    /// A fold rule's name, shown in place of the sender; its messages may come from several senders.
+    var name: String?
     let open: Bool
     let toggle: () -> Void
     let markRead: () -> Void
@@ -583,7 +590,7 @@ private struct GroupRow: View {
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(Fmt.sender(newest))
+                    Text(name ?? Fmt.sender(newest))
                         .font(.system(size: 13, weight: unread > 0 ? .bold : .medium))
                         .lineLimit(1)
                     Text(Fmt.count(hits.count))
@@ -602,7 +609,7 @@ private struct GroupRow: View {
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(Theme.muted)
                         .rotationEffect(.degrees(open ? 90 : 0))
-                    Text(newest.subject.isEmpty ? "（無主旨）" : newest.subject)
+                    Text((name == nil ? "" : Fmt.sender(newest) + "　") + (newest.subject.isEmpty ? "（無主旨）" : newest.subject))
                         .font(.system(size: 13))
                         .lineLimit(1)
                     Spacer(minLength: 6)

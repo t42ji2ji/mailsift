@@ -61,6 +61,17 @@ final class MCPServer {
                             "id": int("Message id"), "reason": str("A few words: why this one"),
                             "checked": bool("false when unsure: listed but unticked (default true)")]]],
               "reason": str("One short sentence: why these messages")], required: ["action", "reason"]),
+        tool("propose_fold_rule", """
+            Propose a grouping rule for the user's unread list in the app. Unread messages matching it fold into one row \
+            under its name, with one button to mark them all read; it also applies to mail that arrives later. A message \
+            matches when its sender address contains any of senders (empty: any sender) and its subject contains any \
+            of subjects (empty: any subject). Same name replaces that rule; remove true deletes it. Does not change mail.
+            """,
+             ["name": str("Short group name shown in the list, in the user's language"),
+              "senders": ["type": "array", "items": ["type": "string"], "description": "Sender address or domain fragments, e.g. linebank.com.tw"],
+              "subjects": ["type": "array", "items": ["type": "string"], "description": "Subject fragments, e.g. 登入通知"],
+              "remove": bool("true: delete the rule with this name"),
+              "reason": str("One short sentence: what this group gathers")], required: ["name", "reason"]),
         tool("draft_reply", "Show the user a reply draft for one message. Does not send: the user edits it and opens it in Mail.",
              ["id": int("Message id to reply to"), "body": str("The reply text only: no subject, no greeting quote of the original"),
               "reply_all": ["type": "boolean", "description": "Reply to all recipients (default false)"]], required: ["id", "body"]),
@@ -202,6 +213,12 @@ final class MCPServer {
                 throw MailSourceError.other("ids or items is required")
             }
             return "Proposal shown to the user; they will confirm in the app."
+        case "propose_fold_rule":
+            guard !(a["name"] as? String ?? "").isEmpty else { throw MailSourceError.other("name is required") }
+            guard a["remove"] as? Bool == true || !(a["senders"] as? [String] ?? []).isEmpty || !(a["subjects"] as? [String] ?? []).isEmpty else {
+                throw MailSourceError.other("senders or subjects is required")
+            }
+            return "Rule shown to the user; they will apply it in the app."
         case "draft_reply":
             guard a["id"] is Int, !(a["body"] as? String ?? "").isEmpty else { throw MailSourceError.other("id and body are required") }
             return "Draft shown to the user; they can edit it and open it in Mail."

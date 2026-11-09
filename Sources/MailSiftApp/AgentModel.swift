@@ -35,6 +35,17 @@ struct AgentDraft: Codable {
     var state: State = .pending
 }
 
+/// A grouping rule for the unread list proposed by the agent, saved once the user applies it.
+struct AgentFoldRule: Codable {
+    enum State: Codable { case pending, applied, cancelled }
+
+    var rule: FoldRule
+    /// Deletes the rule with this name instead.
+    var remove: Bool
+    var reason: String
+    var state: State = .pending
+}
+
 /// What the user did to a message from the transcript.
 struct AgentMailState {
     var busy = false
@@ -50,6 +61,7 @@ struct AgentItem: Identifiable, Codable {
         case tool(String, running: Bool, failed: Bool)
         case proposal(AgentProposal)
         case draft(AgentDraft)
+        case foldRule(AgentFoldRule)
         case error(String)
     }
 
@@ -90,7 +102,7 @@ final class AgentModel {
     /// Confirmed or dismissed proposals since the last turn, reported in the next turn's context.
     @ObservationIgnored private var outcomes: [String] = []
 
-    static let tools = ["search_mail", "read_mail", "read_thread", "list_recent", "list_senders", "index_status", "propose_action", "draft_reply"]
+    static let tools = ["search_mail", "read_mail", "read_thread", "list_recent", "list_senders", "index_status", "propose_action", "propose_fold_rule", "draft_reply"]
     static let workDir = MailLibrary.defaultDatabaseURL().deletingLastPathComponent().appendingPathComponent("agent")
 
     static let backendKey = "agentBackend"
@@ -519,6 +531,14 @@ final class AgentModel {
             lookUp([id])
             return
         }
+        if name == "propose_fold_rule" {
+            guard let ruleName = input["name"] as? String, !ruleName.isEmpty else { return }
+            let rule = FoldRule(name: ruleName, senders: input["senders"] as? [String] ?? [], subjects: input["subjects"] as? [String] ?? [])
+            let remove = input["remove"] as? Bool == true
+            guard remove || !rule.senders.isEmpty || !rule.subjects.isEmpty else { return }
+            append(.foldRule(AgentFoldRule(rule: rule, remove: remove, reason: input["reason"] as? String ?? "")), key: use.id)
+            return
+        }
         if name == "propose_action" {
             guard let action = (input["action"] as? String).flatMap(MailAction.init(rawValue:)), action != .deletePermanently else { return }
             var seen = Set<Int64>(), notes: [Int64: String] = [:], unchecked = Set<Int64>()
@@ -605,6 +625,24 @@ final class AgentModel {
             proposal.state = .cancelled
             outcomes.append("User declined \(proposal.action.rawValue) on \(proposal.ids.count) messages.")
         }
+    }
+
+    /// Unread messages loaded now that a rule would gather.
+    func unreadMatching(_ rule: FoldRule) -> Int { search.unread.filter { rule.matches($0.meta) }.count }
+
+    /// Saves or deletes a proposed fold rule; the unread list regroups at once.
+    func applyFoldRule(_ itemID: Int, _ apply: Bool) {
+        guard let i = items.firstIndex(where: { $0.id == itemID }), case .foldRule(var proposal) = items[i].kind,
+              proposal.state == .pending else { return }
+        if apply {
+            search.setFoldRule(proposal.remove ? nil : proposal.rule, named: proposal.rule.name)
+            outcomes.append("User applied the fold rule \"\(proposal.rule.name)\"" + (proposal.remove ? " removal." : "."))
+        } else {
+            outcomes.append("User declined the fold rule \"\(proposal.rule.name)\".")
+        }
+        proposal.state = apply ? .applied : .cancelled
+        items[i].kind = .foldRule(proposal)
+        save()
     }
 
     /// Ticks or unticks one message of a pending proposal.
@@ -732,11 +770,13 @@ final class AgentModel {
             "- list_recent for time-based questions and triage; search_mail for topics. Their rows carry signals (list = newsletter or notification, known = the user has written to this sender, replied, awaiting = waiting for the other side's answer) and list_recent filters on them; mailbox all includes mail the user sent. Combine tools freely; for cleanup, list_senders shows who sends the most and how much stays unread.",
             "- read_mail before summarizing or quoting a specific message; read_thread for the whole conversation.",
             "- To change mail (trash, archive, markRead, markUnread, flag, unflag, restore = move out of Trash back to the inbox, junk = mark as spam and move to Spam) call propose_action. When you judged messages one by one, pass items with a few-word reason each, and checked false for ones you are unsure about. The user unticks what to keep and confirms in the app. Never say mail was changed; say it is proposed.",
+            "- To group the unread list (the user asks to tidy, merge or regroup unread mail), look at the unread mail first (list_recent unread true), then call propose_fold_rule once per group with sender domains and/or subject words that catch that kind of mail now and later. Keep groups specific; the user applies each in the app. Never say a rule is set; say it is proposed.",
             "- To draft a reply, read_mail first, then call draft_reply with the id and the reply text (in the original message's language unless asked). The user edits it and opens it in Mail; nothing is sent.",
             "- Every time you mention a specific message, write its id as [[id]], e.g. [[12345]]. The app turns it into a link that opens the message, with mail actions, and the link already shows sender and subject, so don't repeat them. Use only ids from tool results or the context; never refer to a message by subject alone. Put each listed message on its own line.",
         ]
         if !outcomes.isEmpty { lines += ["", "Since your last reply:"] + outcomes.map { "- " + $0 } }
 
+        lines += ["", "Unread fold rules now:"] + (search.foldRules.isEmpty ? ["(none)"] : search.foldRules.map { "- \($0.name): senders \($0.senders), subjects \($0.subjects)" })
         lines += ["", "CONTEXT (what the user is looking at now)"]
         let visible = search.query.isEmpty ? search.recent : search.hits
         lines.append(search.query.isEmpty ? "List: newest mail" : "Search query: \(search.query)")
