@@ -72,6 +72,20 @@ final class MCPServer {
               "subjects": ["type": "array", "items": ["type": "string"], "description": "Subject fragments, e.g. 登入通知"],
               "remove": bool("true: delete the rule with this name"),
               "reason": str("One short sentence: what this group gathers")], required: ["name", "reason"]),
+        tool("propose_category", """
+            Propose adding or changing a topic category: the chips over the user's mail list (工作, 交易, 通知…). Custom \
+            categories are found by comparing mail against their description, so write words that really appear in that \
+            mail: typical subjects, sender organisations, service names, in Chinese and English, and avoid words other \
+            categories share (通知, 更新). A name not in use adds a category; an existing custom name replaces its \
+            description; rename gives it a new name; built-in ones can only be hidden or shown. remove deletes a custom \
+            one. Applying relabels all mail once. Does not change mail.
+            """,
+             ["name": str("Category name, existing or new, in the user's language"),
+              "description": str("For a new or custom category: what mail it holds, as described above"),
+              "rename": str("New name for an existing custom category"),
+              "hidden": bool("true: hide its chip (mail is still labelled); false: show it"),
+              "remove": bool("true: delete this custom category"),
+              "reason": str("One short sentence: why")], required: ["name", "reason"]),
         tool("draft_reply", "Show the user a reply draft for one message. Does not send: the user edits it and opens it in Mail.",
              ["id": int("Message id to reply to"), "body": str("The reply text only: no subject, no greeting quote of the original"),
               "reply_all": ["type": "boolean", "description": "Reply to all recipients (default false)"]], required: ["id", "body"]),
@@ -219,6 +233,9 @@ final class MCPServer {
                 throw MailSourceError.other("senders or subjects is required")
             }
             return "Rule shown to the user; they will apply it in the app."
+        case "propose_category":
+            guard !(a["name"] as? String ?? "").isEmpty else { throw MailSourceError.other("name is required") }
+            return "Change shown to the user; they will apply it in the app."
         case "draft_reply":
             guard a["id"] is Int, !(a["body"] as? String ?? "").isEmpty else { throw MailSourceError.other("id and body are required") }
             return "Draft shown to the user; they can edit it and open it in Mail."

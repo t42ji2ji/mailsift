@@ -301,6 +301,8 @@ private struct AgentRow: View {
             ProposalCard(proposal: proposal, itemID: item.id, model: model, openMessage: openMessage)
         case .foldRule(let proposal):
             FoldRuleCard(proposal: proposal, itemID: item.id, model: model)
+        case .category(let proposal):
+            CategoryCard(proposal: proposal, itemID: item.id, model: model)
         case .draft(let draft):
             DraftCard(draft: draft, itemID: item.id, model: model, openMessage: openMessage)
         case .error(let text):
@@ -462,6 +464,56 @@ private struct FoldRuleCard: View {
                 }
             case .applied:
                 Text(proposal.remove ? "已移除" : "已套用").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            case .cancelled:
+                Text("已取消").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+        }
+        .padding(12)
+        .background(Theme.canvas, in: RoundedRectangle(cornerRadius: Theme.radius))
+        .hairlineBorder()
+    }
+}
+
+/// A topic category to add, edit, hide, show or delete.
+private struct CategoryCard: View {
+    let proposal: AgentCategory
+    let itemID: Int
+    let model: AgentModel
+
+    private var title: String {
+        switch proposal.change {
+        case .add: "新增分類"
+        case .edit: "修改分類"
+        case .hide: "隱藏分類"
+        case .show: "顯示分類"
+        case .remove: "刪除分類"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(proposal.rename.map { "\(proposal.name) → \($0)" } ?? proposal.name).font(.system(size: 13))
+            }
+            if !proposal.reason.isEmpty {
+                Text(proposal.reason).font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+            }
+            if let description = proposal.description {
+                Text(description).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            switch proposal.state {
+            case .pending:
+                HStack(spacing: 8) {
+                    Button("套用") { model.applyCategory(itemID, true) }.buttonStyle(InkButtonStyle())
+                    Button("取消") { model.applyCategory(itemID, false) }.buttonStyle(LineButtonStyle())
+                }
+                if proposal.description != nil {
+                    Text("套用後所有信會重新分類一次").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                }
+            case .applied:
+                Text("已套用").font(.system(size: 12)).foregroundStyle(Theme.muted)
             case .cancelled:
                 Text("已取消").font(.system(size: 12)).foregroundStyle(Theme.muted)
             }

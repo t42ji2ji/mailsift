@@ -111,8 +111,8 @@ struct SearchView: View {
             VStack(spacing: 0) {
                 sortRow
                 HitList(model: model, sections: model.newestFirst
-                    ? DateSection.group(model.hits.sorted { $0.meta.date > $1.meta.date })
-                    : [DateSection(title: "", hits: model.hits)], showMatch: true)
+                    ? DateSection.group(model.hits.sorted { $0.meta.date > $1.meta.date }, fold: true)
+                    : [DateSection(title: "", hits: model.hits, fold: true)], showMatch: true)
             }
         }
     }
@@ -254,7 +254,8 @@ struct DateSection: Identifiable {
     var total: Int?
     /// Shows its first `preview` rows and a "顯示全部" that opens the whole box.
     var more: (preview: Int, opens: BrowseBox)?
-    /// Mail from one sender with one subject folds into a single row (unread mail: repeated notices).
+    /// Mail from one sender with one subject folds into a single row (unread mail: repeated notices; search results:
+    /// monthly statements, numbered receipts).
     var fold = false
     var id: String { title }
     var count: Int { max(total ?? 0, hits.count) }
@@ -312,9 +313,13 @@ private struct HitList: View {
 
     private func entries(_ section: DateSection) -> [Entry] {
         guard section.fold else { return section.hits.map(Entry.one) }
-        let rules = model.foldRules
+        // The user's fold rules are for unread mail; search results fold only by sender and subject.
+        let rules = showMatch ? [] : model.foldRules
         func key(_ m: MessageMeta) -> String {
-            rules.first { $0.matches(m) }.map { "rule:\($0.id)" } ?? m.senderAddress.lowercased() + "\n" + m.subject
+            if let rule = rules.first(where: { $0.matches(m) }) { return "rule:\(rule.id)" }
+            // In search results subjects that differ only in numbers fold too: 對帳單 2026年09月, receipt #2901-….
+            let subject = showMatch ? m.subject.replacingOccurrences(of: "[0-9][-0-9/.,:]*", with: "#", options: .regularExpression) : m.subject
+            return m.senderAddress.lowercased() + "\n" + subject
         }
         var members: [String: [SearchHit]] = [:]
         for hit in section.hits { members[key(hit.meta), default: []].append(hit) }
@@ -323,7 +328,9 @@ private struct HitList: View {
             let k = key(hit.meta)
             guard let group = members[k], group.count > 1 else { return .one(hit) }
             let name = rules.first { "rule:\($0.id)" == k }?.name
-            return placed.insert(k).inserted ? .group(k, group, name: name) : nil
+            // A search group stands where its best match ranks and opens newest first.
+            let shown = showMatch ? group.sorted { $0.meta.date > $1.meta.date } : group
+            return placed.insert(k).inserted ? .group(k, shown, name: name) : nil
         }
     }
 
@@ -344,7 +351,7 @@ private struct HitList: View {
                             switch entry {
                             case .one(let hit): row(section, hit)
                             case .group(let key, let hits, let name):
-                                GroupRow(hits: hits, name: name, open: expanded.contains(key)) {
+                                GroupRow(hits: hits, name: name, terms: showMatch ? model.terms : [], open: expanded.contains(key)) {
                                     withAnimation(.easeOut(duration: 0.2)) {
                                         if expanded.remove(key) == nil { expanded.insert(key) }
                                     }
@@ -373,6 +380,7 @@ private struct HitList: View {
             .onKeyPress(.downArrow) { move(1, proxy) }
             .onKeyPress(.upArrow) { move(-1, proxy) }
             .onKeyPress(characters: .init(charactersIn: "jkesu#rRf")) { press in shortcut(press, proxy) }
+            .onChange(of: model.query) { expanded = [] }  // a new search starts with its groups closed
         }
     }
 
@@ -576,6 +584,7 @@ private struct GroupRow: View {
     let hits: [SearchHit]
     /// A fold rule's name, shown in place of the sender; its messages may come from several senders.
     var name: String?
+    var terms: [String] = []
     let open: Bool
     let toggle: () -> Void
     let markRead: () -> Void
@@ -591,7 +600,7 @@ private struct GroupRow: View {
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(name ?? Fmt.sender(newest))
+                    Text(Highlight.attributed(name ?? Fmt.sender(newest), terms))
                         .font(.system(size: 13, weight: unread > 0 ? .bold : .medium))
                         .lineLimit(1)
                     Text(Fmt.count(hits.count))
@@ -610,7 +619,7 @@ private struct GroupRow: View {
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(Theme.muted)
                         .rotationEffect(.degrees(open ? 90 : 0))
-                    Text((name == nil ? "" : Fmt.sender(newest) + "　") + (newest.subject.isEmpty ? "（無主旨）" : newest.subject))
+                    Text(Highlight.attributed((name == nil ? "" : Fmt.sender(newest) + "　") + (newest.subject.isEmpty ? "（無主旨）" : newest.subject), terms))
                         .font(.system(size: 13))
                         .lineLimit(1)
                     Spacer(minLength: 6)

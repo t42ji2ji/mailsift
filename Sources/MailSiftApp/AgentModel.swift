@@ -46,6 +46,20 @@ struct AgentFoldRule: Codable {
     var state: State = .pending
 }
 
+/// A topic category change proposed by the agent, saved once the user applies it.
+struct AgentCategory: Codable {
+    enum State: Codable { case pending, applied, cancelled }
+    enum Change: Codable { case add, edit, hide, show, remove }
+
+    var name: String
+    var change: Change
+    /// The description for a new or edited category.
+    var description: String?
+    var rename: String?
+    var reason: String
+    var state: State = .pending
+}
+
 /// What the user did to a message from the transcript.
 struct AgentMailState {
     var busy = false
@@ -62,6 +76,7 @@ struct AgentItem: Identifiable, Codable {
         case proposal(AgentProposal)
         case draft(AgentDraft)
         case foldRule(AgentFoldRule)
+        case category(AgentCategory)
         case error(String)
     }
 
@@ -102,7 +117,7 @@ final class AgentModel {
     /// Confirmed or dismissed proposals since the last turn, reported in the next turn's context.
     @ObservationIgnored private var outcomes: [String] = []
 
-    static let tools = ["search_mail", "read_mail", "read_thread", "list_recent", "list_senders", "index_status", "propose_action", "propose_fold_rule", "draft_reply"]
+    static let tools = ["search_mail", "read_mail", "read_thread", "list_recent", "list_senders", "index_status", "propose_action", "propose_fold_rule", "propose_category", "draft_reply"]
     static let workDir = MailLibrary.defaultDatabaseURL().deletingLastPathComponent().appendingPathComponent("agent")
 
     static let backendKey = "agentBackend"
@@ -539,6 +554,30 @@ final class AgentModel {
             append(.foldRule(AgentFoldRule(rule: rule, remove: remove, reason: input["reason"] as? String ?? "")), key: use.id)
             return
         }
+        if name == "propose_category" {
+            guard let catName = input["name"] as? String, !catName.isEmpty else { return }
+            let existing = search.categories.first { $0.name == catName }
+            let description = (input["description"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let rename = (input["rename"] as? String).flatMap { $0.isEmpty || $0 == catName ? nil : $0 }
+            let change: AgentCategory.Change
+            switch existing {
+            case nil:
+                guard let _ = description else { return }
+                change = .add
+            case let c? where input["remove"] as? Bool == true:
+                guard !c.isBuiltIn else { return }
+                change = .remove
+            case let c? where !c.isBuiltIn && (description != nil || rename != nil):
+                change = .edit
+            case let c?:
+                guard let hidden = input["hidden"] as? Bool, hidden != c.hidden else { return }
+                change = hidden ? .hide : .show
+            }
+            append(.category(AgentCategory(name: catName, change: change, description: change == .edit || change == .add ? description : nil,
+                                           rename: change == .edit ? rename : nil, reason: input["reason"] as? String ?? "")),
+                   key: use.id)
+            return
+        }
         if name == "propose_action" {
             guard let action = (input["action"] as? String).flatMap(MailAction.init(rawValue:)), action != .deletePermanently else { return }
             var seen = Set<Int64>(), notes: [Int64: String] = [:], unchecked = Set<Int64>()
@@ -642,6 +681,33 @@ final class AgentModel {
         }
         proposal.state = apply ? .applied : .cancelled
         items[i].kind = .foldRule(proposal)
+        save()
+    }
+
+    /// Saves a proposed category change; a new or edited description relabels all mail.
+    func applyCategory(_ itemID: Int, _ apply: Bool) {
+        guard let i = items.firstIndex(where: { $0.id == itemID }), case .category(var proposal) = items[i].kind,
+              proposal.state == .pending else { return }
+        if apply {
+            var list = search.categories
+            let at = list.firstIndex { $0.name == proposal.name }
+            switch (proposal.change, at) {
+            case (.add, nil): list.append(MailCategory(name: proposal.name, description: proposal.description ?? ""))
+            case (.edit, let j?):
+                if let d = proposal.description { list[j].description = d }
+                if let n = proposal.rename { list[j].name = n }
+            case (.hide, let j?): list[j].hidden = true
+            case (.show, let j?): list[j].hidden = false
+            case (.remove, let j?): list.remove(at: j)
+            default: break
+            }
+            search.saveCategories(list)
+            outcomes.append("User applied the category change (\(proposal.change)) to \"\(proposal.name)\".")
+        } else {
+            outcomes.append("User declined the category change (\(proposal.change)) to \"\(proposal.name)\".")
+        }
+        proposal.state = apply ? .applied : .cancelled
+        items[i].kind = .category(proposal)
         save()
     }
 
@@ -771,12 +837,16 @@ final class AgentModel {
             "- read_mail before summarizing or quoting a specific message; read_thread for the whole conversation.",
             "- To change mail (trash, archive, markRead, markUnread, flag, unflag, restore = move out of Trash back to the inbox, junk = mark as spam and move to Spam) call propose_action. When you judged messages one by one, pass items with a few-word reason each, and checked false for ones you are unsure about. The user unticks what to keep and confirms in the app. Never say mail was changed; say it is proposed.",
             "- To group the unread list (the user asks to tidy, merge or regroup unread mail), look at the unread mail first (list_recent unread true), then call propose_fold_rule once per group with sender domains and/or subject words that catch that kind of mail now and later. Keep groups specific; the user applies each in the app. Never say a rule is set; say it is proposed.",
+            "- To add or change a topic category (the chips over the list), call propose_category. For a description, first look at real mail of that kind (search_mail) and write words that appear in it. The user applies it in the app.",
             "- To draft a reply, read_mail first, then call draft_reply with the id and the reply text (in the original message's language unless asked). The user edits it and opens it in Mail; nothing is sent.",
             "- Every time you mention a specific message, write its id as [[id]], e.g. [[12345]]. The app turns it into a link that opens the message, with mail actions, and the link already shows sender and subject, so don't repeat them. Use only ids from tool results or the context; never refer to a message by subject alone. Put each listed message on its own line.",
         ]
         if !outcomes.isEmpty { lines += ["", "Since your last reply:"] + outcomes.map { "- " + $0 } }
 
         lines += ["", "Unread fold rules now:"] + (search.foldRules.isEmpty ? ["(none)"] : search.foldRules.map { "- \($0.name): senders \($0.senders), subjects \($0.subjects)" })
+        lines += ["", "Topic categories now (in order):"] + search.categories.map {
+            "- \($0.name)\($0.isBuiltIn ? " (built-in)" : "")\($0.hidden ? " (hidden)" : "")\($0.description.isEmpty ? "" : ": " + $0.description)"
+        }
         lines += ["", "CONTEXT (what the user is looking at now)"]
         let visible = search.query.isEmpty ? search.recent : search.hits
         lines.append(search.query.isEmpty ? "List: newest mail" : "Search query: \(search.query)")
