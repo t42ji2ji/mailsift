@@ -377,7 +377,7 @@ private struct HitList: View {
     }
 
     private func row(_ section: DateSection, _ hit: SearchHit) -> some View {
-        HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch)
+        HitRow(hit: hit, selected: model.selection == hit.id, showMatch: showMatch, terms: showMatch ? model.terms : [])
             .id(rowID(section, hit))
             .onTapGesture {
                 model.selection = hit.id
@@ -524,6 +524,7 @@ private struct HitRow: View {
     let hit: SearchHit
     let selected: Bool
     let showMatch: Bool
+    var terms: [String] = []
     @State private var hovering = false
 
     var body: some View {
@@ -534,7 +535,7 @@ private struct HitRow: View {
                 .padding(.top, 6)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(Fmt.sender(hit.meta))
+                    Text(Highlight.attributed(Fmt.sender(hit.meta), terms))
                         .font(.system(size: 13, weight: hit.meta.isRead ? .medium : .bold))
                         .lineLimit(1)
                     Spacer(minLength: 6)
@@ -543,14 +544,14 @@ private struct HitRow: View {
                         .foregroundStyle(Theme.muted)
                 }
                 HStack(spacing: 6) {
-                    Text(hit.meta.subject.isEmpty ? "（無主旨）" : hit.meta.subject)
+                    Text(hit.meta.subject.isEmpty ? AttributedString("（無主旨）") : Highlight.attributed(hit.meta.subject, terms))
                         .font(.system(size: 13))
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     if hit.meta.isFlagged { Image(systemName: "flag.fill").font(.system(size: 10)).foregroundStyle(Theme.flag) }
                 }
                 HStack(alignment: .top, spacing: 6) {
-                    Text(hit.snippet)
+                    Text(Highlight.attributed(hit.snippet, terms))
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.muted)
                         .lineLimit(2)

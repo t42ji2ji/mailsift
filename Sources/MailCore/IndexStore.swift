@@ -29,7 +29,7 @@ final class IndexStore: @unchecked Sendable {
     }
 
     /// detail=none: no token positions, about a quarter of the size. Phrases can't be matched, so a term's trigrams
-    /// are ANDed and the term itself is checked against the text (`fullTextSearch`).
+    /// are ANDed and the term itself is checked against the text (`keywordSearch`).
     private static let ftsColumns = """
         subject, sender_name, sender_address, body, content='messages', content_rowid='id', tokenize='trigram', detail=none
         """
@@ -294,6 +294,16 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
+    /// Messages whose vector was stored at or before `seq` (made from an older document text), newest first.
+    func idsWithVectors(upTo seq: Int64) throws -> [Int64] {
+        try read { db in
+            var ids: [Int64] = []
+            try db.query("SELECT m.id FROM vectors v JOIN messages m ON m.id = v.id WHERE v.seq <= ? ORDER BY m.date DESC",
+                         [.int(seq)]) { ids.append($0.int(0)) }
+            return ids
+        }
+    }
+
     /// Subject and body for embedding, in the order of `ids` (missing ids are dropped).
     func documents(_ ids: [Int64]) throws -> [(id: Int64, subject: String, body: String)] {
         try read { db in
@@ -508,12 +518,44 @@ final class IndexStore: @unchecked Sendable {
         }
     }
 
-    /// FTS5 trigram search: any of `terms` (each ≥ 3 characters, matched as a substring); mail with a term in the
-    /// subject or sender first, then newest. The index has no positions, so it finds mail holding all of a term's
-    /// trigrams and LIKE keeps those holding the term itself. Not bm25: without positions it re-tokenizes every match.
-    func fullTextSearch(_ terms: [String], filter: SearchFilter, limit: Int) throws -> [Int64] {
-        let match = terms.map { term -> String in
-            // Code points, as the trigram tokenizer counts them.
+    /// Mail holding any of `terms` (matched as substrings), best first. Each term weighs ln(1 + N / mail holding it), so
+    /// rare words decide and common ones ("for") barely count, and doubles in the subject or sender; ties newest first.
+    /// When every term has 3+ characters the trigram index narrows the scan (it has no positions, so a term's trigrams
+    /// are ANDed and LIKE checks the term itself); shorter terms, such as most Chinese words, scan every message.
+    func keywordSearch(_ terms: [String], filter: SearchFilter, limit: Int) throws -> [Int64] {
+        guard !terms.isEmpty else { return [] }
+        let inHeader = "(m.subject LIKE ? ESCAPE '\\' OR m.sender_name LIKE ? ESCAPE '\\' OR m.sender_address LIKE ? ESCAPE '\\')"
+        let columns = terms.map { _ in inHeader + ", m.body LIKE ? ESCAPE '\\'" }.joined(separator: ", ")
+        let termArgs = terms.flatMap { Array(repeating: SQLValue.text("%" + Self.escapeLike($0) + "%"), count: 4) }
+        let clause = Self.whereClause(filter)
+        let indexed = terms.allSatisfy { $0.unicodeScalars.count >= 3 }
+        let from = indexed
+            ? "messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? AND "
+            : "messages m WHERE "
+        return try read { db in
+            var total = 0
+            try db.query("SELECT count(*) FROM messages m WHERE \(clause.sql)", clause.args) { total = Int($0.int(0)) }
+            // Per row, per term: 2 in the subject or sender, 1 in the body only, 0 absent.
+            var rows: [(id: Int64, date: Double, hits: [Int])] = []
+            try db.query("SELECT m.id, m.date, \(columns) FROM \(from)\(clause.sql)",
+                         termArgs + (indexed ? [.text(Self.trigramMatch(terms))] : []) + clause.args) { s in
+                let hits = terms.indices.map { s.int(Int32(2 + 2 * $0)) != 0 ? 2 : s.int(Int32(3 + 2 * $0)) != 0 ? 1 : 0 }
+                if hits.contains(where: { $0 > 0 }) { rows.append((s.int(0), s.double(1), hits)) }
+            }
+            let weights = terms.indices.map { t -> Double in
+                let holding = rows.filter { $0.hits[t] > 0 }.count
+                return holding == 0 ? 0 : log(1 + Double(max(total, holding)) / Double(holding))
+            }
+            let scored = rows.map { row in
+                (row.id, row.date, zip(row.hits, weights).reduce(0.0) { $0 + Double($1.0) * $1.1 })
+            }
+            return scored.sorted { $0.2 != $1.2 ? $0.2 > $1.2 : $0.1 > $1.1 }.prefix(limit).map(\.0)
+        }
+    }
+
+    /// FTS5 query for mail holding all of a term's trigrams, for any of `terms` (code points, as the tokenizer counts).
+    private static func trigramMatch(_ terms: [String]) -> String {
+        terms.map { term -> String in
             let chars = Array(term.unicodeScalars)
             let trigrams = (0...chars.count - 3).map { i -> String in
                 let trigram = String(String.UnicodeScalarView(chars[i..<i + 3]))
@@ -521,37 +563,6 @@ final class IndexStore: @unchecked Sendable {
             }
             return "(" + trigrams.joined(separator: " AND ") + ")"
         }.joined(separator: " OR ")
-        let inHeader = "m.subject LIKE ? ESCAPE '\\' OR m.sender_name LIKE ? ESCAPE '\\' OR m.sender_address LIKE ? ESCAPE '\\'"
-        let headerHit = "(" + terms.map { _ in inHeader }.joined(separator: " OR ") + ")"
-        let contains = "(" + terms.map { _ in inHeader + " OR m.body LIKE ? ESCAPE '\\'" }.joined(separator: " OR ") + ")"
-        let patterns = terms.map { SQLValue.text("%" + Self.escapeLike($0) + "%") }
-        let headerArgs = patterns.flatMap { Array(repeating: $0, count: 3) }
-        let containsArgs = patterns.flatMap { Array(repeating: $0, count: 4) }
-        let clause = Self.whereClause(filter)
-        return try read { db in
-            var ids: [Int64] = []
-            try db.query("""
-                SELECT m.id FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid
-                WHERE messages_fts MATCH ? AND \(contains) AND \(clause.sql) ORDER BY \(headerHit) DESC, m.date DESC LIMIT ?
-                """, [.text(match)] + containsArgs + clause.args + headerArgs + [.int(Int64(limit))]) { ids.append($0.int(0)) }
-            return ids
-        }
-    }
-
-    /// Substring scan for terms too short for trigrams: all of `terms`, newest first.
-    func substringSearch(_ terms: [String], filter: SearchFilter, limit: Int) throws -> [Int64] {
-        let clause = Self.whereClause(filter)
-        let perTerm = "(m.subject LIKE ? ESCAPE '\\' OR m.sender_name LIKE ? ESCAPE '\\' OR m.sender_address LIKE ? ESCAPE '\\' OR m.body LIKE ? ESCAPE '\\')"
-        let sql = "SELECT m.id FROM messages m WHERE "
-            + (terms.map { _ in perTerm } + [clause.sql]).joined(separator: " AND ") + " ORDER BY m.date DESC LIMIT ?"
-        let termArgs = terms.flatMap { term -> [SQLValue] in
-            Array(repeating: .text("%" + Self.escapeLike(term) + "%"), count: 4)
-        }
-        return try read { db in
-            var ids: [Int64] = []
-            try db.query(sql, termArgs + clause.args + [.int(Int64(limit))]) { ids.append($0.int(0)) }
-            return ids
-        }
     }
 
     /// Vectors with `seq` in (after, upTo], appended to `matrix` as Float32 rows. Returns the last seq read.

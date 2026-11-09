@@ -20,6 +20,8 @@ public final class MailLibrary: @unchecked Sendable {
     static let embedChunk = 256
     /// Characters of body text embedded per message; the tokenizer stops at 512 tokens anyway.
     static let embedBodyLength = 2000
+    /// Bump when the text given to the embedder changes; older vectors are then redone in place.
+    static let embedText = "2"  // 2: links left out
 
     public let source: MailSource
     let store: IndexStore
@@ -144,12 +146,19 @@ public final class MailLibrary: @unchecked Sendable {
             return
         }
         report(progress) { $0.phase = .embedding }
-        let pending = try store.idsMissingVectors()
+        // Vectors made from an older document text are redone after the missing ones, newest first; until then
+        // the old ones keep serving search.
+        if try store.setting("embedText") != Self.embedText {
+            try store.setSetting("staleVectorsUpTo", String(try store.vectorState().maxSeq))
+            try store.setSetting("embedText", Self.embedText)
+        }
+        let stale = try store.setting("staleVectorsUpTo").flatMap(Int64.init) ?? 0
+        let pending = try store.idsMissingVectors() + (stale > 0 ? store.idsWithVectors(upTo: stale) : [])
         for start in stride(from: 0, to: pending.count, by: Self.embedChunk) {
             try Task.checkCancellation()
             let docs = try store.documents(Array(pending[start..<min(start + Self.embedChunk, pending.count)]))
             let vectors = try await embedder.embedDocuments(
-                docs.map { (title: $0.subject, body: String($0.body.prefix(Self.embedBodyLength))) })
+                docs.map { (title: $0.subject, body: String(Searcher.withoutLinks($0.body).prefix(Self.embedBodyLength))) })
             try store.setVectors(zip(docs, vectors).map { (id: $0.id, vector: $1) })
             try refreshCounts(progress)
         }

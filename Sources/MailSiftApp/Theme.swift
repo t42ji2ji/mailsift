@@ -14,6 +14,8 @@ enum Theme {
     static let fill = Color.primary.opacity(0.045)
     static let hover = Color.primary.opacity(0.07)
     static let selected = Color.primary.opacity(0.09)
+    /// Behind search terms found in a result or the open message.
+    static let mark = Color.primary.opacity(0.14)
     /// The one accent: flags.
     static let flag = Color(red: 0.84, green: 0.29, blue: 0.16)
 

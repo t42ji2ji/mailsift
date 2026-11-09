@@ -1,5 +1,6 @@
 import Accelerate
 import Foundation
+import NaturalLanguage
 
 /// Hybrid search: brute-force cosine over all stored vectors plus FTS5 keyword search, merged by reciprocal rank
 /// fusion. Messages without vectors yet are still found by keyword.
@@ -12,6 +13,7 @@ final class Searcher: @unchecked Sendable {
     // Row-major [ids.count × dimension] copy of the vectors table, loaded once and extended as vectors are added.
     private var matrix: [Float] = []
     private var ids: [Int64] = []
+    private var rowOf: [Int64: Int] = [:]
     private var lastSeq: Int64 = 0
 
     init(store: IndexStore) { self.store = store }
@@ -22,19 +24,14 @@ final class Searcher: @unchecked Sendable {
         defer { lock.unlock() }
         matrix = []
         ids = []
+        rowOf = [:]
         lastSeq = 0
     }
 
     func search(_ query: String, filter: SearchFilter, limit: Int, embedder: TextEmbedder?) async throws -> [SearchHit] {
-        let terms = query.split(whereSeparator: \.isWhitespace).map(String.init)
+        let terms = SearchTerms.of(query)
         guard !terms.isEmpty else { return [] }
-
-        // Trigram FTS only matches terms of 3+ characters. Shorter terms (e.g. two-character Chinese words) fall
-        // back to a substring scan, used only when the query has no longer term to search for.
-        let long = terms.filter { $0.count >= 3 }
-        let keyword = long.isEmpty
-            ? try store.substringSearch(terms, filter: filter, limit: Self.candidates)
-            : try store.fullTextSearch(long, filter: filter, limit: Self.candidates)
+        let keyword = try store.keywordSearch(terms, filter: filter, limit: Self.candidates)
 
         var semantic: [Int64] = []
         if let embedder {
@@ -54,7 +51,7 @@ final class Searcher: @unchecked Sendable {
             guard let row = rows[id] else { return nil }
             let inKeyword = keywordSet.contains(id)
             let match: SearchHit.Match = inKeyword && semanticSet.contains(id) ? .both : inKeyword ? .keyword : .semantic
-            return SearchHit(meta: row.meta, snippet: Self.snippet(row.body, terms: inKeyword ? terms : []),
+            return SearchHit(meta: row.meta, snippet: Self.snippet(row.body, terms: terms),
                              score: score, match: match)
         }
     }
@@ -112,27 +109,93 @@ final class Searcher: @unchecked Sendable {
         return norm > 0 ? sum.map { $0 / norm } : sum
     }
 
-    /// Loads vectors added since the last call; reloads everything when some were deleted. Caller holds `lock`.
+    /// Loads vectors added since the last call, a re-embedded message replacing its row; reloads everything when
+    /// some were deleted. Caller holds `lock`.
     private func refresh() throws {
         let state = try store.vectorState()
         if state.maxSeq > lastSeq {
-            lastSeq = try store.vectors(after: lastSeq, upTo: state.maxSeq, into: &matrix, ids: &ids)
+            var added: [Float] = [], addedIDs: [Int64] = []
+            lastSeq = try store.vectors(after: lastSeq, upTo: state.maxSeq, into: &added, ids: &addedIDs)
+            let dim = addedIDs.isEmpty ? 0 : added.count / addedIDs.count
+            for (k, id) in addedIDs.enumerated() {
+                let vector = added[k * dim..<(k + 1) * dim]
+                if let row = rowOf[id] {
+                    matrix.replaceSubrange(row * dim..<(row + 1) * dim, with: vector)
+                } else {
+                    rowOf[id] = ids.count
+                    ids.append(id)
+                    matrix.append(contentsOf: vector)
+                }
+            }
         }
         if ids.count != state.count {
             matrix = []
             ids = []
             lastSeq = try store.vectors(after: 0, upTo: .max, into: &matrix, ids: &ids)
+            rowOf = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })
         }
     }
 
-    /// Text around the first occurrence of any term, else the start of the body.
+    /// `text` with web and mailto links blanked out: in mail converted from HTML they are about a third of the text.
+    static func withoutLinks(_ text: String) -> String {
+        text.replacingOccurrences(of: #"<?\b(https?://|mailto:)[^\s>]*>?"#, with: " ", options: .regularExpression)
+    }
+
+    /// Text around the first occurrence of any term, else the start of the body. Links are left out.
     static func snippet(_ body: String, terms: [String], length: Int = 160) -> String {
-        let text = body.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let text = withoutLinks(body).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let hit = terms.lazy.compactMap { text.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) }
             .min { $0.lowerBound < $1.lowerBound }
         guard let hit else { return String(text.prefix(length)) }
         let start = text.index(hit.lowerBound, offsetBy: -40, limitedBy: text.startIndex) ?? text.startIndex
         let snippet = String(text[start...].prefix(length))
         return start == text.startIndex ? snippet : "…" + snippet
+    }
+}
+
+/// The words of a query, for keyword search and highlighting. Spaces separate words; text in Chinese or Japanese is
+/// segmented further. The segmenter splits words it doesn't know into characters (訂位 → 訂 位), so runs of single
+/// characters are joined back. Particles and short English function words are dropped when other words remain.
+public enum SearchTerms {
+    private static let fillers: Set<String> = [
+        "的", "了", "在", "是", "和", "與", "及", "或", "跟", "把", "被", "嗎", "呢", "吧", "a", "an", "the", "to", "for",
+        "of", "in", "on", "at", "and", "or", "with", "from", "by", "is", "my", "me", "i",
+    ]
+
+    public static func of(_ query: String) -> [String] {
+        var terms: [String] = []
+        for word in query.split(whereSeparator: \.isWhitespace).map(String.init) {
+            guard word.unicodeScalars.contains(where: isCJK) else { terms.append(word); continue }
+            let before = terms.count
+            var run = ""
+            func flush() { if !run.isEmpty { terms.append(run); run = "" } }
+            let tokenizer = NLTokenizer(unit: .word)
+            tokenizer.string = word
+            tokenizer.enumerateTokens(in: word.startIndex..<word.endIndex) { range, _ in
+                let token = String(word[range])
+                if fillers.contains(token) {
+                    flush()
+                } else if token.count == 1, token.unicodeScalars.allSatisfy(isCJK) {
+                    run += token
+                } else {
+                    flush()
+                    terms.append(token)
+                }
+                return true
+            }
+            flush()
+            if terms.count == before { terms.append(word) }
+        }
+        var seen = Set<String>()
+        terms = terms.filter { seen.insert($0.lowercased()).inserted }
+        let kept = terms.filter { !fillers.contains($0.lowercased()) && !($0.count == 1 && $0.unicodeScalars.allSatisfy(isCJK)) }
+        return kept.isEmpty ? terms : kept
+    }
+
+    private static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x3040...0x30FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF, 0x20000...0x2FA1F: true
+        default: false
+        }
     }
 }

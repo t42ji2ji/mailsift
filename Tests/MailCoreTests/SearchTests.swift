@@ -46,6 +46,20 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(Set(byDate.map(\.id)), [3, 4])
     }
 
+    func testQueryTerms() {
+        XCTAssertEqual(SearchTerms.of("下個月的會議邀請"), ["下個月", "會議", "邀請"])
+        XCTAssertEqual(SearchTerms.of("機票訂位"), ["機票", "訂位"])
+        XCTAssertEqual(SearchTerms.of("invoice for AWS"), ["invoice", "AWS"])
+        XCTAssertEqual(SearchTerms.of("supabase 發票"), ["supabase", "發票"])
+        XCTAssertEqual(SearchTerms.of("for"), ["for"])
+        XCTAssertEqual(SearchTerms.of("的"), ["的"])
+        XCTAssertEqual(SearchTerms.of("github.com  Invoice invoice"), ["github.com", "Invoice"])
+    }
+
+    func testSnippetLeavesOutLinks() {
+        XCTAssertEqual(Searcher.snippet("立榮 <https://x.com/a.gif> 通知 https://y.com/b?c=1 完", terms: []), "立榮 通知 完")
+    }
+
     func testSnippetCentersOnHit() {
         let body = String(repeating: "filler ", count: 50) + "the needle is here" + String(repeating: " tail", count: 50)
         let snippet = Searcher.snippet(body, terms: ["NEEDLE"])

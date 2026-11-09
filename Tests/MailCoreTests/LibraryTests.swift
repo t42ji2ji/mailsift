@@ -2,6 +2,25 @@ import XCTest
 @testable import MailCore
 
 final class LibraryTests: XCTestCase {
+    func testVectorsFromAnOlderDocumentTextAreRedoneInPlace() async throws {
+        let embedder = FakeEmbedder()
+        let library = try makeLibrary(FakeSource(messages: [
+            .make(1, subject: "a", body: "see https://x.com/track?id=1 now"), .make(2, subject: "b", body: "two"),
+        ]), embedder: embedder)
+        try await library.runIndex()
+        _ = try library.searcher.nearest([Float](repeating: 0.1, count: 64), allowed: nil, limit: 2)  // loads vectors
+        try library.store.setSetting("embedText", "1")
+        embedder.embeddedCount = 0
+        try await library.embedPending()
+        XCTAssertEqual(embedder.embeddedCount, 2)
+        XCTAssertEqual(try library.store.counts().vectors, 2)
+        XCTAssertEqual(try library.store.idsWithVectors(upTo: Int64(try library.store.setting("staleVectorsUpTo")!)!), [])
+        XCTAssertEqual(try library.searcher.scores([[Float](repeating: 0.1, count: 64)]).ids.count, 2, "replaced, not appended")
+        embedder.embeddedCount = 0
+        try await library.embedPending()
+        XCTAssertEqual(embedder.embeddedCount, 0, "done once")
+    }
+
     func testSyncAddsRemovesAndUpdates() async throws {
         let source = FakeSource(messages: [
             .make(1, subject: "one"), .make(2, subject: "two"), .make(3, subject: "three"),

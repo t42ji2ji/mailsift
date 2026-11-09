@@ -99,8 +99,10 @@ final class AppModel {
         }
     }
 
+    /// New mail goes ahead of embedding, which can run for many minutes: the run stops after its current batch and
+    /// the restart syncs, then carries on embedding.
     private func mailChanged(_ lib: MailLibrary) {
-        if indexing { changedWhileIndexing = true } else { runIndex(lib) }
+        if !indexing || status.phase == .embedding { runIndex(lib) } else { changedWhileIndexing = true }
     }
 
     /// New mail arrives through Mail.app; the watcher picks it up as it lands, this every minute in case it misses
@@ -189,6 +191,7 @@ final class AppModel {
                 }
                 changed = true
                 lib.setEmbedder(embedder)
+                embedDeferred = true  // stays set if this run is cancelled, so the next one finishes the work
                 try await lib.embedPending(progress: report)
                 embedDeferred = false
             } catch {

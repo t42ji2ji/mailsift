@@ -5,6 +5,8 @@ import Observation
 @MainActor @Observable
 final class SearchModel {
     private(set) var query = ""
+    /// The words of `query` that keyword search looks for, marked in results and the open message.
+    private(set) var terms: [String] = []
     private(set) var hits: [SearchHit] = []
     /// Results shown newest first instead of by relevance; each new search starts by relevance.
     var newestFirst = false
@@ -276,6 +278,7 @@ final class SearchModel {
         searchTask?.cancel()
         if text != query { newestFirst = false }
         query = text
+        terms = SearchTerms.of(text)
         searchError = nil
         guard !text.isEmpty, let lib = app.library else {
             hits = []

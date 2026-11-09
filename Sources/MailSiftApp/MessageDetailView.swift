@@ -23,12 +23,12 @@ struct MessageDetailView: View {
                     actionBar(m, hasHTML: m.html != nil)
                     if let error = model.actionError { ErrorStrip(text: error) }
                     if conversation {
-                        ConversationView(open: m, thread: model.thread, library: model.library) { subjectLine(m) }
+                        ConversationView(open: m, thread: model.thread, library: model.library, highlight: model.terms) { subjectLine(m) }
                             .id(m.meta.id)
                     } else if !plainText, let html = model.html ?? m.html {
                         header(m).padding(.horizontal, 36).padding(.bottom, 18)
                         Rectangle().fill(Theme.hairline).frame(height: 1)
-                        HTMLBodyView(html: html, allowRemote: remoteImages)
+                        HTMLBodyView(html: html, allowRemote: remoteImages, highlight: model.terms)
                             .padding(.top, 18)
                             .background(Color(white: 0.965))  // mail HTML assumes a light page, also in dark mode
                     } else {
@@ -36,7 +36,7 @@ struct MessageDetailView: View {
                             VStack(alignment: .leading, spacing: 26) {
                                 header(m)
                                 Rectangle().fill(Theme.hairline).frame(height: 1)
-                                Text(m.bodyText.isEmpty ? AttributedString("（沒有文字內容）") : Linkify.attributed(m.bodyText))
+                                Text(m.bodyText.isEmpty ? AttributedString("（沒有文字內容）") : Linkify.attributed(m.bodyText, highlight: model.terms))
                                     .font(.system(size: 14))
                                     .lineSpacing(5)
                                     .foregroundStyle(m.bodyText.isEmpty ? Theme.muted : Theme.ink)
@@ -184,6 +184,7 @@ private struct ConversationView<Subject: View>: View {
     let open: ParsedMessage
     let thread: [ParsedMessage]
     let library: MailLibrary?
+    let highlight: [String]
     @ViewBuilder let subject: () -> Subject
     @State private var expanded: Set<Int64> = []
 
@@ -234,7 +235,7 @@ private struct ConversationView<Subject: View>: View {
             }
             .buttonStyle(.plain)
             if isOpen {
-                Text(m.bodyText.isEmpty ? AttributedString("（沒有文字內容）") : Linkify.attributed(m.bodyText))
+                Text(m.bodyText.isEmpty ? AttributedString("（沒有文字內容）") : Linkify.attributed(m.bodyText, highlight: highlight))
                     .font(.system(size: 14))
                     .lineSpacing(5)
                     .foregroundStyle(m.bodyText.isEmpty ? Theme.muted : Theme.ink)

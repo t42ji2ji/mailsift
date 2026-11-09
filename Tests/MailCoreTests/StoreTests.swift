@@ -10,11 +10,11 @@ final class StoreTests: XCTestCase {
             .make(1, subject: "本期信用卡帳單", body: "您的繳款金額為 NT$1,234"),
             .make(2, subject: "Cloud invoice", body: "Your invoice is ready"),
         ])
-        XCTAssertEqual(try store.fullTextSearch(["信用卡"], filter: .init(), limit: 10), [1])
-        XCTAssertEqual(try store.fullTextSearch(["INVOICE"], filter: .init(), limit: 10), [2])
-        XCTAssertEqual(try store.fullTextSearch(["信用卡", "invoice"], filter: .init(), limit: 10).sorted(), [1, 2])
-        XCTAssertEqual(try store.substringSearch(["帳單"], filter: .init(), limit: 10), [1])
-        XCTAssertEqual(try store.substringSearch(["50%"], filter: .init(), limit: 10), [], "LIKE wildcards are escaped")
+        XCTAssertEqual(try store.keywordSearch(["信用卡"], filter: .init(), limit: 10), [1])
+        XCTAssertEqual(try store.keywordSearch(["INVOICE"], filter: .init(), limit: 10), [2])
+        XCTAssertEqual(try store.keywordSearch(["信用卡", "invoice"], filter: .init(), limit: 10).sorted(), [1, 2])
+        XCTAssertEqual(try store.keywordSearch(["帳單"], filter: .init(), limit: 10), [1])
+        XCTAssertEqual(try store.keywordSearch(["50%"], filter: .init(), limit: 10), [], "LIKE wildcards are escaped")
     }
 
     func testFullTextSearchNeedsTheWholeTerm() throws {
@@ -23,7 +23,7 @@ final class StoreTests: XCTestCase {
             .make(1, subject: "本期信用卡帳單", body: ""),
             .make(2, subject: "信用卡 與 用卡帳", body: "both trigrams, not the term"),
         ])
-        XCTAssertEqual(try store.fullTextSearch(["信用卡帳"], filter: .init(), limit: 10), [1])
+        XCTAssertEqual(try store.keywordSearch(["信用卡帳"], filter: .init(), limit: 10), [1])
     }
 
     func testFullTextSearchPutsSubjectHitsFirstThenNewest() throws {
@@ -33,7 +33,19 @@ final class StoreTests: XCTestCase {
             .make(2, subject: "Hello", body: "the invoice is attached"),
             .make(3, subject: "Hi", body: "another invoice"),
         ])
-        XCTAssertEqual(try store.fullTextSearch(["invoice"], filter: .init(), limit: 10), [1, 3, 2])
+        XCTAssertEqual(try store.keywordSearch(["invoice"], filter: .init(), limit: 10), [1, 3, 2])
+    }
+
+    func testRareTermsOutweighCommonOnes() throws {
+        let store = try IndexStore(url: temporaryDatabaseURL())
+        try store.upsert([
+            .make(1, subject: "Statement for March", body: "AWS invoice for your account"),
+            .make(2, subject: "Tips for you", body: "for for for"),
+            .make(3, subject: "Plans for the week", body: "nothing else"),
+            .make(4, subject: "Notes for later", body: "more"),
+        ])
+        XCTAssertEqual(try store.keywordSearch(["for", "AWS"], filter: .init(), limit: 10).first, 1,
+                       "the only mail with the rare word wins although newer mail has the common one in its subject")
     }
 
     func testUpgradeKeywordIndexFromPositions() throws {
@@ -47,14 +59,14 @@ final class StoreTests: XCTestCase {
                 subject, sender_name, sender_address, body, content='messages', content_rowid='id', tokenize='trigram');
             INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
             """)
-        XCTAssertEqual(try store.fullTextSearch(["信用卡帳"], filter: .init(), limit: 10), [1], "works before the upgrade")
+        XCTAssertEqual(try store.keywordSearch(["信用卡帳"], filter: .init(), limit: 10), [1], "works before the upgrade")
         try store.upgradeKeywordIndex()
         var sql = ""
         try old.query("SELECT sql FROM sqlite_master WHERE name = 'messages_fts'") { sql = $0.text(0) }
         XCTAssertTrue(sql.contains("detail=none"))
-        XCTAssertEqual(try store.fullTextSearch(["信用卡帳"], filter: .init(), limit: 10), [1])
+        XCTAssertEqual(try store.keywordSearch(["信用卡帳"], filter: .init(), limit: 10), [1])
         try store.upsert([.make(2, subject: "Cloud invoice", body: "")])
-        XCTAssertEqual(try store.fullTextSearch(["invoice"], filter: .init(), limit: 10), [2], "triggers still feed it")
+        XCTAssertEqual(try store.keywordSearch(["invoice"], filter: .init(), limit: 10), [2], "triggers still feed it")
     }
 
     func testDeleteRemovesTextAndVectors() throws {
@@ -62,7 +74,7 @@ final class StoreTests: XCTestCase {
         try store.upsert([.make(1, subject: "delete me please"), .make(2, subject: "keep me please")])
         try store.setVectors([(1, [1, 0]), (2, [0, 1])])
         try store.delete([1])
-        XCTAssertEqual(try store.fullTextSearch(["please"], filter: .init(), limit: 10), [2])
+        XCTAssertEqual(try store.keywordSearch(["please"], filter: .init(), limit: 10), [2])
         XCTAssertEqual(try store.allIDs(), [2])
         XCTAssertEqual(try store.counts().vectors, 1)
     }
@@ -71,8 +83,8 @@ final class StoreTests: XCTestCase {
         let store = try IndexStore(url: temporaryDatabaseURL())
         try store.upsert([.make(1, subject: "old subject")])
         try store.upsert([.make(1, subject: "new subject")])
-        XCTAssertEqual(try store.fullTextSearch(["old"], filter: .init(), limit: 10), [])
-        XCTAssertEqual(try store.fullTextSearch(["new"], filter: .init(), limit: 10), [1])
+        XCTAssertEqual(try store.keywordSearch(["old"], filter: .init(), limit: 10), [])
+        XCTAssertEqual(try store.keywordSearch(["new"], filter: .init(), limit: 10), [1])
     }
 
     func testVectorsMissingNewestFirstAndUnknownIDsSkipped() throws {
@@ -112,7 +124,7 @@ final class StoreTests: XCTestCase {
         let work = try store.recent(.inbox, limit: 10, accounts: ["work@z.com"]).map(\.meta.id)
         XCTAssertEqual(Set(work), [2, 3])
         XCTAssertEqual(try store.recent(.inbox, limit: 10).count, 3)
-        XCTAssertEqual(try store.fullTextSearch(["invoice"], filter: .init(accounts: ["me@example.com"]), limit: 10), [1])
+        XCTAssertEqual(try store.keywordSearch(["invoice"], filter: .init(accounts: ["me@example.com"]), limit: 10), [1])
         XCTAssertEqual(try store.ids(matching: .init(accounts: ["work@z.com"])), [2, 3])
     }
 
