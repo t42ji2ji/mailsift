@@ -315,12 +315,21 @@ private struct HitList: View {
         guard section.fold else { return section.hits.map(Entry.one) }
         // The user's fold rules are for unread mail; search results fold only by sender and subject.
         let rules = showMatch ? [] : model.foldRules
-        func key(_ m: MessageMeta) -> String {
-            if let rule = rules.first(where: { $0.matches(m) }) { return "rule:\(rule.id)" }
-            // In search results subjects that differ only in numbers fold too: 對帳單 2026年09月, receipt #2901-….
-            let subject = showMatch ? m.subject.replacingOccurrences(of: "[0-9][-0-9/.,:]*", with: "#", options: .regularExpression) : m.subject
-            return m.senderAddress.lowercased() + "\n" + subject
+        // In search results subjects fold when they differ only in numbers (對帳單 2026年09月, receipt #2901-…) or in a
+        // character or two (您的／你的 Apple 收據): the same mail, reworded over the years.
+        var seen: [String: [String]] = [:]  // sender → subjects that start a group
+        var keys: [Int64: String] = [:]
+        for hit in section.hits {
+            let m = hit.meta
+            if let rule = rules.first(where: { $0.matches(m) }) { keys[hit.id] = "rule:\(rule.id)"; continue }
+            let sender = m.senderAddress.lowercased()
+            guard showMatch else { keys[hit.id] = sender + "\n" + m.subject; continue }
+            let subject = m.subject.replacingOccurrences(of: "[0-9][-0-9/.,:]*", with: "#", options: .regularExpression)
+            let same = seen[sender, default: []].first { Self.nearlySame($0, subject) }
+            if same == nil { seen[sender, default: []].append(subject) }
+            keys[hit.id] = sender + "\n" + (same ?? subject)
         }
+        func key(_ m: MessageMeta) -> String { keys[m.id]! }
         var members: [String: [SearchHit]] = [:]
         for hit in section.hits { members[key(hit.meta), default: []].append(hit) }
         var placed = Set<String>()
@@ -332,6 +341,22 @@ private struct HitList: View {
             let shown = showMatch ? group.sorted { $0.meta.date > $1.meta.date } : group
             return placed.insert(k).inserted ? .group(k, shown, name: name) : nil
         }
+    }
+
+    /// At most one differing character per ten (edit distance), at least one.
+    private static func nearlySame(_ a: String, _ b: String) -> Bool {
+        let a = Array(a), b = Array(b)
+        let allowed = max(1, min(a.count, b.count) / 10)
+        guard abs(a.count - b.count) <= allowed, !a.isEmpty, !b.isEmpty else { return a == b }
+        var previous = Array(0...b.count)
+        for i in 1...a.count {
+            var current = [i] + Array(repeating: 0, count: b.count)
+            for j in 1...b.count {
+                current[j] = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1))
+            }
+            previous = current
+        }
+        return previous[b.count] <= allowed
     }
 
     /// Previews count a folded group as one row.
