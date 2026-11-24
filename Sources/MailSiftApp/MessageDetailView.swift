@@ -91,7 +91,7 @@ struct MessageDetailView: View {
             subjectLine(m)
                 .textSelection(.enabled)
             HStack(alignment: showDetails ? .top : .center, spacing: 12) {
-                Monogram(name: Fmt.sender(m.meta))
+                Avatar(address: m.meta.senderAddress, name: Fmt.sender(m.meta))
                 VStack(alignment: .leading, spacing: 3) {
                     Button { showDetails.toggle() } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {

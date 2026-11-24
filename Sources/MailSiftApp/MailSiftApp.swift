@@ -305,6 +305,8 @@ private struct AccountItem: View {
                     .font(.system(size: 12))
                     .foregroundStyle(shown ? Theme.ink : Theme.muted)
                     .frame(width: 16)
+                Avatar(address: account, name: account, size: 16)
+                    .opacity(shown ? 1 : 0.5)
                 Text(account)
                     .font(.system(size: 12))
                     .foregroundStyle(shown ? Theme.ink : Theme.muted)

@@ -1,4 +1,5 @@
 import AppKit
+import MailCore
 import SwiftUI
 
 /// Monochrome palette. Ink and paper swap in dark mode, so everything is built from these two plus opacities.
@@ -117,6 +118,48 @@ struct Monogram: View {
             .foregroundStyle(Theme.paper)
             .frame(width: size, height: size)
             .background(Theme.ink, in: Circle())
+    }
+}
+
+/// The sender's picture when a public source has one (see `AvatarStore`), else their initial.
+/// Pictures are fetched only while remote content is allowed in Settings.
+struct Avatar: View {
+    let address: String
+    let name: String
+    var size: CGFloat = 34
+    @AppStorage(SettingsView.loadRemoteKey) private var online = true
+    @State private var image: NSImage?
+    /// Decoded pictures by address, so moving between messages doesn't flash the initial.
+    @MainActor private static var decoded: [String: NSImage] = [:]
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size, height: size)
+                    .background(.white)
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(Theme.hairline))
+            } else {
+                Monogram(name: name, size: size)
+            }
+        }
+        .task(id: address) {
+            image = Self.decoded[address]
+            guard image == nil else { return }
+            let address = address, online = online
+            let picture = await Task.detached { () -> NSImage? in
+                guard let data = await AvatarStore.shared.image(for: address, online: online),
+                      let image = NSImage(data: data), image.size.width > 0 else { return nil }
+                return image
+            }.value
+            guard let picture, !Task.isCancelled else { return }
+            Self.decoded[address] = picture
+            image = picture
+        }
     }
 }
 

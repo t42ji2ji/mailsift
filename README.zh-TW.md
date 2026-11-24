@@ -37,7 +37,7 @@ MailSift 直接讀 Mail 存在磁碟上的資料，所以需要**完全取用磁
 
 ## 隱私
 
-信件的索引和搜尋都在你的 Mac 上。MailSift 只有兩種情況會連網：從 Hugging Face 下載搜尋模型；以及使用 AI 側欄時，agent 讀到的信會透過你自己的 Claude Code 或 Codex 送到 Anthropic 或 OpenAI。
+信件的索引和搜尋都在你的 Mac 上。MailSift 只有三種情況會連網：從 Hugging Face 下載搜尋模型；抓寄件者大頭貼；以及使用 AI 側欄時，agent 讀到的信會透過你自己的 Claude Code 或 Codex 送到 Anthropic 或 OpenAI。每個寄件者的大頭貼只查一次、存在你的 Mac 上：email 的雜湊值送給 Gravatar、寄件網域透過 DNS 查 BIMI logo，並向寄件者自己的網站要網站圖示。在設定裡關掉遠端內容就不再查。
 
 ## 從原始碼建置
 

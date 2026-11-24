@@ -37,7 +37,7 @@ MailSift reads Mail's data on disk, so it asks for **Full Disk Access** (System 
 
 ## Privacy
 
-Your mail is indexed and searched on your Mac. MailSift goes online only to download the search model from Hugging Face, and when you use the AI panel: then the messages the agent reads go to Anthropic or OpenAI through your own Claude Code or Codex.
+Your mail is indexed and searched on your Mac. MailSift goes online only to download the search model from Hugging Face; to fetch sender pictures; and when you use the AI panel: then the messages the agent reads go to Anthropic or OpenAI through your own Claude Code or Codex. A sender's picture is looked up once and kept on your Mac: a hash of the address goes to Gravatar, the sender's domain to DNS for its BIMI logo, and the sender's own website is asked for its icon. Turning off remote content in Settings stops these lookups.
 
 ## Build from source
 
