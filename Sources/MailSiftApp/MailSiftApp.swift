@@ -233,10 +233,13 @@ struct MainView: View {
 
     private var iconsOnly: Bool { compactRail || !showRail }
 
+    private var showsAccountToggle: Bool { !iconsOnly && search.accounts.count + search.syncingAccounts.count > 1 }
+
     private func railItem(_ p: Pane) -> some View {
         // The unread box is opened from Inbox, so Inbox stays selected over it.
         RailItem(title: p.title, symbol: p.symbol, selected: pane == p || p == .box(.inbox) && pane == .box(.unread),
-                 compact: iconsOnly) { pane = p }
+                 compact: iconsOnly, badge: p == .box(.inbox) ? search.unreadCount : 0,
+                 badgeInset: p == .box(.inbox) && showsAccountToggle ? 18 : 0) { pane = p }
             .keyboardShortcut(p.key, modifiers: .command)
     }
 
@@ -248,7 +251,7 @@ struct MainView: View {
                 .padding(.bottom, 22)
             railItem(.box(.inbox))
                 .overlay(alignment: .trailing) {
-                    if !iconsOnly, search.accounts.count + search.syncingAccounts.count > 1 {
+                    if showsAccountToggle {
                         Button { withAnimation(.easeInOut(duration: 0.15)) { showAccounts.toggle() } } label: {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 10, weight: .semibold))
@@ -345,6 +348,10 @@ private struct RailItem: View {
     let symbol: String
     let selected: Bool
     let compact: Bool
+    /// Unread count shown right of the title.
+    var badge = 0
+    /// Room kept on the right for a control laid over the item.
+    var badgeInset: CGFloat = 0
     let action: () -> Void
     @State private var hovering = false
 
@@ -355,6 +362,12 @@ private struct RailItem: View {
                 if !compact {
                     Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular))
                     Spacer()
+                    if badge > 0 {
+                        Text("\(badge)")
+                            .font(.system(size: 12).monospacedDigit())
+                            .foregroundStyle(selected ? Theme.paper.opacity(0.75) : Theme.muted)
+                            .padding(.trailing, badgeInset)
+                    }
                 }
             }
             .foregroundStyle(selected ? Theme.paper : Theme.ink)
