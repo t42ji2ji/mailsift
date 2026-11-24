@@ -17,6 +17,8 @@ final class SearchModel {
     /// another one is selected.
     private(set) var unread: [SearchHit] = []
     private(set) var unreadCount = 0
+    /// Unread Inbox mail in every category, for the rail.
+    private(set) var inboxUnread = 0
     static let unreadPreview = 10
     /// Unread mail loaded for the section, more than it previews: repeats of one notice fold into one row.
     private static let unreadLoad = 200
@@ -182,9 +184,11 @@ final class SearchModel {
         pendingLoads += 1
         Task {
             defer { pendingLoads -= 1 }
-            var (fresh, count) = await Task.detached {
-                (lib.recent(.unread, limit: limit, accounts: only, category: category), lib.count(.unread, accounts: only, category: category))
+            var (fresh, count, total) = await Task.detached {
+                (lib.recent(.unread, limit: limit, accounts: only, category: category), lib.count(.unread, accounts: only, category: category),
+                 category == nil ? nil : lib.count(.unread, accounts: only, category: nil))
             }.value
+            if let total, total != inboxUnread { inboxUnread = total }
             guard category == self.category else { return }
             fresh.removeAll { removing[$0.id] != nil }
             let loaded = fresh.count
@@ -193,6 +197,7 @@ final class SearchModel {
             keepOpen(&fresh, from: unread)
             if fresh.map(\.meta) != unread.map(\.meta) { unread = fresh }
             if count != unreadCount { unreadCount = count }
+            if total == nil, count != inboxUnread { inboxUnread = count }
         }
     }
 
@@ -381,6 +386,7 @@ final class SearchModel {
         unread.removeAll { group.contains($0.id) }
         rows[.unread]?.removeAll { group.contains($0.id) }
         unreadCount = max(unreadCount - ids.count, 0)
+        inboxUnread = max(inboxUnread - ids.count, 0)
         Task {
             do {
                 if let why = try await lib.perform(.markRead, ids: ids).failed.values.first { actionError = why }

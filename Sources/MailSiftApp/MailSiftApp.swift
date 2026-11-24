@@ -238,7 +238,7 @@ struct MainView: View {
     private func railItem(_ p: Pane) -> some View {
         // The unread box is opened from Inbox, so Inbox stays selected over it.
         RailItem(title: p.title, symbol: p.symbol, selected: pane == p || p == .box(.inbox) && pane == .box(.unread),
-                 compact: iconsOnly, badge: p == .box(.inbox) ? search.unreadCount : 0,
+                 compact: iconsOnly, badge: p == .box(.inbox) ? search.inboxUnread : 0,
                  badgeInset: p == .box(.inbox) && showsAccountToggle ? 18 : 0) { pane = p }
             .keyboardShortcut(p.key, modifiers: .command)
     }
